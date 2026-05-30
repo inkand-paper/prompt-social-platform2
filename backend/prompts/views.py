@@ -2,7 +2,7 @@ from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db import models
-from django.db.models import Count, Avg
+from django.db.models import Count, Avg, F
 from accounts.models import User
 from accounts.serializers import UserSerializer
 from .models import Prompt, Category, Tag, Rating, Comment, Bookmark, Notification, Collection
@@ -56,9 +56,9 @@ class CopyEventView(APIView):
 
     def post(self, request, pk):
         try:
+            # Use atomic update to prevent race conditions
+            Prompt.objects.filter(pk=pk).update(copy_count=F('copy_count') + 1)
             prompt = Prompt.objects.get(pk=pk)
-            prompt.copy_count += 1
-            prompt.save()
             return Response({"status": "success", "new_count": prompt.copy_count})
         except Prompt.DoesNotExist:
             return Response({"error": "Prompt not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -98,7 +98,10 @@ class CommentListCreateView(generics.ListCreateAPIView):
         return Comment.objects.filter(prompt_id=self.kwargs['pk']).order_by('-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user, prompt_id=self.kwargs['pk'])
+        comment = serializer.save(author=self.request.user, prompt_id=self.kwargs['pk'])
+        # Atomic increment of comment_count
+        Prompt.objects.filter(pk=self.kwargs['pk']).update(comment_count=F('comment_count') + 1)
+        return comment
 
 class TrendingTagsView(generics.ListAPIView):
     queryset = Tag.objects.all().order_by('-usage_count')[:8]

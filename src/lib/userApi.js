@@ -1,4 +1,5 @@
 import api from './api'
+import { normalizePrompt } from './feedApi'
 
 const MOCK_MODE = false
 const MOCK_DELAY = 350
@@ -83,10 +84,7 @@ export async function uploadAvatar(file) {
 // ── GET /prompts/{slug}/ ──────────────────────────────────────
 export async function fetchPrompt(slug) {
   const { data } = await api.get(`/prompts/${slug}/`)
-  // frontend normalization handled in feedApi? No, fetchPrompt returns raw.
-  // Actually, I should use normalizePrompt if I want consistency.
-  // But for now let's just return.
-  return data
+  return normalizePrompt(data)
 }
 
 // ── GET /prompts/{id}/comments/ ──────────────────────────────

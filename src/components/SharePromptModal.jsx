@@ -1,9 +1,6 @@
-// src/components/SharePromptModal.jsx
-// Modal for creating/sharing a new prompt. Wires to POST /api/v1/prompts/. 
-// MOCK_MODE is controlled in feedApi.js — flip to false when backend is live.
-
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
+import api from '../lib/api'
 
 const PROMPT_TYPES = ['text', 'image', 'video', 'audio', 'code']
 const AI_MODELS = ['ChatGPT-4o', 'Claude 3.5', 'Midjourney v6', 'Stable Diffusion XL', 'Gemini 1.5 Pro', 'DALL-E 3', 'Other']
@@ -20,13 +17,8 @@ export default function SharePromptModal({ onClose, onSuccess }) {
     setIsSubmitting(true)
     setSubmitError(null)
     try {
-      // PRODUCTION: uncomment below
-      // const { data: result } = await api.post('/prompts/', data)
-      // onSuccess(result)
-
-      // MOCK: simulate success
-      await new Promise((r) => setTimeout(r, 700))
-      onSuccess({ ...data, id: `mock-${Date.now()}` })
+      const { data: result } = await api.post('/prompts/create/', data)
+      onSuccess(result)
     } catch (err) {
       setSubmitError(err.response?.data?.detail || 'Failed to share prompt. Try again.')
     } finally {
@@ -102,7 +94,7 @@ export default function SharePromptModal({ onClose, onSuccess }) {
             <textarea
               id="prompt-desc"
               className="form-input form-textarea"
-              placeholder="Optional: describe what this prompt does and what results to expect"
+              placeholder="Provide some context…"
               rows={3}
               {...register('description')}
             />
@@ -111,26 +103,44 @@ export default function SharePromptModal({ onClose, onSuccess }) {
           {/* Visibility */}
           <div className="form-group">
             <label className="form-label">Visibility</label>
-            <div className="visibility-options">
-              {['public', 'unlisted', 'private'].map((v) => (
-                <label key={v} className="radio-option">
-                  <input type="radio" value={v} {...register('visibility')} />
-                  <span className="radio-label">
-                    {v.charAt(0).toUpperCase() + v.slice(1)}
-                  </span>
-                </label>
-              ))}
+            <div className="radio-group">
+              <label className="radio-label">
+                <input type="radio" value="public" {...register('visibility')} />
+                <span>Public</span>
+              </label>
+              <label className="radio-label">
+                <input type="radio" value="unlisted" {...register('visibility')} />
+                <span>Unlisted</span>
+              </label>
+              <label className="radio-label">
+                <input type="radio" value="private" {...register('visibility')} />
+                <span>Private</span>
+              </label>
             </div>
           </div>
 
-          {submitError && <div className="form-api-error">{submitError}</div>}
+          {submitError && (
+            <div className="alert alert-error" style={{ marginTop: '1rem' }}>
+              {submitError}
+            </div>
+          )}
 
-          <div className="modal-actions">
-            <button type="button" className="btn-ghost" onClick={onClose} disabled={isSubmitting}>Cancel</button>
-            <button type="submit" className="share-btn modal-submit" disabled={isSubmitting}>
-              {isSubmitting ? 'Sharing…' : '+ Share Prompt'}
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={isSubmitting}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <span className="spinner"></span>
+                  <span>Sharing...</span>
+                </>
+              ) : (
+                'Share Prompt'
+              )}
             </button>
           </div>
+
         </form>
       </div>
     </div>
