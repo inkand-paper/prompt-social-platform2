@@ -50,21 +50,27 @@ class FollowUserView(APIView):
             if target_user == request.user:
                 return Response({"error": "You cannot follow yourself"}, status=status.HTTP_400_BAD_REQUEST)
                 
-            follow, created = Follow.objects.get_or_create(follower=request.user, following=target_user)
+            _, created = Follow.objects.get_or_create(follower=request.user, following=target_user)
             if not created:
-                # Toggle unfollow
-                follow.delete()
-                # Update counters
-                target_user.follower_count = max(0, target_user.follower_count - 1)
-                request.user.following_count = max(0, request.user.following_count - 1)
-                target_user.save()
-                request.user.save()
-                return Response({"following": False})
+                return Response({"following": True, "message": "Already following"})
             
             target_user.follower_count += 1
             request.user.following_count += 1
             target_user.save()
             request.user.save()
             return Response({"following": True})
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def delete(self, request, username):
+        try:
+            target_user = User.objects.get(username=username)
+            deleted, _ = Follow.objects.filter(follower=request.user, following=target_user).delete()
+            if deleted:
+                target_user.follower_count = max(0, target_user.follower_count - 1)
+                request.user.following_count = max(0, request.user.following_count - 1)
+                target_user.save()
+                request.user.save()
+            return Response({"following": False})
         except User.DoesNotExist:
             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)

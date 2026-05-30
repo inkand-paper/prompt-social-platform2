@@ -69,10 +69,18 @@ class RatingCreateUpdateView(APIView):
     def post(self, request, pk):
         try:
             prompt = Prompt.objects.get(pk=pk)
+            value = request.data.get('value')
+            try:
+                value = float(value)
+                if not (0.5 <= value <= 5.0):
+                    raise ValueError
+            except (TypeError, ValueError):
+                return Response({"error": "Rating must be between 0.5 and 5.0"}, status=status.HTTP_400_BAD_REQUEST)
+
             rating, created = Rating.objects.update_or_create(
                 user=request.user,
                 prompt=prompt,
-                defaults={'value': request.data.get('value')}
+                defaults={'value': value}
             )
             stats = Rating.objects.filter(prompt=prompt).aggregate(avg=Avg('value'), count=Count('id'))
             prompt.average_rating = stats['avg']

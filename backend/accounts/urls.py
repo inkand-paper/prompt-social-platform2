@@ -12,6 +12,6 @@ urlpatterns = [
     
     # User Profiles
     path('profiles/<str:username>/', PublicProfileView.as_view(), name='user_profile'),
-    path('profiles/<str:username>/prompts/', UserPromptsView.as_view(), name='user_prmpts'),
+    path('profiles/<str:username>/prompts/', UserPromptsView.as_view(), name='user_prompts'),
     path('profiles/<str:username>/follow/', FollowUserView.as_view(), name='user_follow'),
 ]
