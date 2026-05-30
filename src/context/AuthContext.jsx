@@ -8,54 +8,42 @@ import { connectSocket, disconnectSocket } from '../lib/socket'
 
 const AuthContext = createContext(null)
 
-// ── Mock user for development (remove when backend is live) ───
-const MOCK_USER = {
-  id: 'mock-user-001',
-  username: 'alexjohnson',
-  display_name: 'Alex Johnson',
-  email: 'alex@example.com',
-  avatar_url: null,
-  avatar_color: '#3282B8',
-  reputation_score: 2840,
-  prompt_count: 47,
-  follower_count: 312,
-  following_count: 89,
-  is_verified: false,
-}
-
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
-  const [loading, setLoading] = useState(true) // true while checking existing session
+  const [loading, setLoading] = useState(true)
 
   // ── On mount: check if user has an existing session ──────────
   useEffect(() => {
-    const storedUser = sessionStorage.getItem('pa_mock_user')
-    if (storedUser) {
-      const parsed = JSON.parse(storedUser)
-      setUser(parsed)
-      // In production: would also call /auth/refresh/ here to get a new access token
+    async function restoreSession() {
+      try {
+        // Try to get current user. Interceptor will handle refresh if access token is missing but cookie exists.
+        const { data } = await api.get('/auth/me/')
+        setUser(data)
+      } catch (err) {
+        // Not logged in or session expired
+        setUser(null)
+      } finally {
+        setLoading(false)
+      }
     }
-    setLoading(false)
+    restoreSession()
   }, [])
 
   // ── login(email, password) ───────────────────────────────────
   const login = useCallback(async (email, password) => {
     try {
-      // PRODUCTION: uncomment below and remove mock block
-      // const { data } = await api.post('/auth/login/', { email, password })
-      // _setAccessToken(data.access_token)
-      // setUser(data.user)
-      // connectSocket(data.access_token)
-
-      // MOCK: simulate a successful login
-      await new Promise((r) => setTimeout(r, 600)) // fake network delay
-      if (email && password.length >= 6) {
-        sessionStorage.setItem('pa_mock_user', JSON.stringify(MOCK_USER))
-        setUser(MOCK_USER)
-        return { success: true }
-      } else {
-        return { success: false, error: 'Invalid credentials' }
-      }
+      const { data } = await api.post('/auth/login/', { email, password })
+      
+      // DRF SimpleJWT returns { access, refresh }. Refresh is in HttpOnly cookie if configured, 
+      // but here we get it in body too (or we just use access).
+      _setAccessToken(data.access)
+      
+      // Fetch full user profile after login
+      const userRes = await api.get('/auth/me/')
+      setUser(userRes.data)
+      
+      connectSocket(data.access)
+      return { success: true }
     } catch (err) {
       const message = err.response?.data?.detail || 'Login failed. Please try again.'
       return { success: false, error: message }
@@ -65,15 +53,12 @@ export function AuthProvider({ children }) {
   // ── register(username, email, password) ─────────────────────
   const register = useCallback(async (username, email, password) => {
     try {
-      // PRODUCTION: uncomment below
-      // const { data } = await api.post('/auth/register/', { username, email, password })
-      // return { success: true, message: data.message }
-
-      // MOCK
-      await new Promise((r) => setTimeout(r, 800))
-      return { success: true, message: 'Account created! Please check your email to verify.' }
+      const { data } = await api.post('/auth/register/', { username, email, password })
+      return { success: true, message: 'Account created! You can now log in.' }
     } catch (err) {
-      const message = err.response?.data?.detail || 'Registration failed.'
+      const message = err.response?.data?.username?.[0] || 
+                      err.response?.data?.email?.[0] || 
+                      'Registration failed.'
       return { success: false, error: message }
     }
   }, [])
@@ -81,10 +66,10 @@ export function AuthProvider({ children }) {
   // ── logout() ─────────────────────────────────────────────────
   const logout = useCallback(async () => {
     try {
-      // PRODUCTION: await api.post('/auth/logout/')
-      sessionStorage.removeItem('pa_mock_user')
+      // In a real setup, we might want to blacklist the token on backend
+      // await api.post('/auth/logout/')
     } catch (_) {
-      // ignore errors — clear state regardless
+      // ignore
     } finally {
       _clearAccessToken()
       disconnectSocket()
@@ -96,8 +81,8 @@ export function AuthProvider({ children }) {
   const refreshToken = useCallback(async () => {
     try {
       const { data } = await api.post('/auth/refresh/')
-      _setAccessToken(data.access_token)
-      return data.access_token
+      _setAccessToken(data.access)
+      return data.access
     } catch (_) {
       logout()
       return null

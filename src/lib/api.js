@@ -46,7 +46,7 @@ api.interceptors.response.use(
 
       try {
         const { data } = await axios.post(`${BASE_URL}/auth/refresh/`, {}, { withCredentials: true })
-        const newToken = data.access_token
+        const newToken = data.access
         _setAccessToken(newToken)
         _queue.forEach(({ resolve }) => resolve(newToken))
         _queue = []
