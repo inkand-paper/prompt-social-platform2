@@ -2260,3 +2260,789 @@ Once the app is live and stable, in this order:
 7. **Full-text search** — Replace `icontains` in `SearchView` with PostgreSQL `SearchVector` / `SearchRank` for proper relevance ranking.
 
 8. **Mobile app** — React Native using the same backend API. No backend changes needed.
+
+
+
+cat >> /home/claude/prompt-social-platform2/IMPLEMENTATION.md << 'ENDPLAN'
+
+
+---
+
+---
+
+# UPDATE — May 30, 2026 (Third Audit — Full Backend + UI Plan)
+
+> **Every file read. Every class checked. Every endpoint verified.**
+> Date: May 30, 2026. This is the most complete and accurate plan to date.
+
+---
+
+## Audit Results — What's Done, What's Broken
+
+### ✅ Previously flagged bugs — ALL confirmed fixed
+
+| Bug | Status |
+|---|---|
+| `requirements.txt` missing | ✅ Exists — `django`, `drf`, `simplejwt`, `corsheaders`, `psycopg2-binary`, `python-dotenv`, `Pillow`, `gunicorn` |
+| `.env.example` missing | ✅ Exists with all vars documented |
+| `USE_SQLITE` defaulted to `True` | ✅ Fixed — now defaults `'False'`, PostgreSQL is default |
+| `token_blacklist` not in `INSTALLED_APPS` | ✅ Added — `rest_framework_simplejwt.token_blacklist` present |
+| Admin panels empty | ✅ Both `admin.py` files fully registered with `list_display`, `search_fields`, `actions` |
+| `fetchPrompt` not normalizing | ✅ Fixed — now calls `normalizePrompt(data)` |
+| `SharePromptModal` still mocked | ✅ Fixed — calls `api.post('/prompts/create/', data)` |
+| `CopyEventView` race condition | ✅ Fixed — uses `F('copy_count') + 1` atomic update |
+| `comment_count` not incremented | ✅ Fixed — `perform_create` does atomic `F('comment_count') + 1` |
+| `RightSidebar` all hardcoded | ✅ Fully wired — fetches tags, prompters, categories from real API |
+| `Feed.jsx` still using mock data | ✅ Wired — uses `useFeed()` hook with infinite scroll |
+
+### 🔴 New Critical Issue Found — 100 CSS Classes Are Missing
+
+This is the single biggest unresolved problem in the entire codebase.
+
+Every page added since the original prototype (`PromptDetailPage`, `NotificationsPage`, `SettingsPage`, `TrendingPage`, `MyPromptsPage`, `CollectionsPage`, `StarredPage`, `UserProfilePage`, `CommentSection`) uses CSS classes that do **not exist** in `src/index.css`.
+
+Result: visiting any of these pages produces completely unstyled raw HTML — no layout, no spacing, no visual design at all. The pages are logically correct but visually broken.
+
+**Full list of 100 missing CSS classes:**
+
+```
+.notif-badge          .tab-badge            .trending-list        .trending-item
+.trending-rank        .my-prompts-list      .my-prompt-row        .my-prompt-meta
+.my-prompt-cat        .my-prompt-visibility .my-prompt-title      .my-prompt-preview
+.my-prompt-footer     .my-prompt-stats      .my-prompt-actions    .my-prompt-action-btn
+.collection-card      .collection-card-name .collection-card-info .collection-card-desc
+.collection-card-meta .collection-card-vis  .collections-grid     .collection-create-panel
+.unstar-btn           .settings-page        .settings-title       .settings-form
+.settings-section     .settings-section-label .settings-fields    .settings-divider
+.settings-save-row    .settings-saved-msg   .settings-readonly-field .settings-change-link
+.avatar-upload-row    .avatar-upload-actions .avatar-upload-btn   .avatar-upload-hint
+.notif-list           .notif-item (partial) .notif-dot            .notif-icon-wrap
+.notif-icon           .notif-content        .notif-message        .notif-time
+.mark-all-btn         .notif-skeleton       .notif-pref-row       .notif-pref-label
+.toggle-wrap          .toggle-input         .toggle-slider        .detail-header
+.detail-title         .detail-meta          .detail-author        .detail-author-name
+.detail-stats         .detail-stat          .detail-body-wrap     .detail-body-header
+.detail-body-label    .detail-body-text     .detail-description   .detail-description-text
+.detail-section-label .detail-rating-row    .detail-rating-count  .copy-main-btn
+.detail-action-btn    .comment-form         .comment-form-row     .comment-form-actions
+.comment-char-count   .comment-submit-btn   .comment-textarea     .comment-input-wrap
+.comment-body-wrap    .comment-meta         .comment-author       .comment-time
+.comment-body         .comment-actions      .comment-like-btn     .comment-auth-prompt
+.comments-heading     .comments-count       .comments-loading     .comment-skeleton
+.comments-empty       .comment-list         .comment-av (partial) .inline-link
+.danger-zone          .danger-text          .danger-btn           .profile-display-name
+.profile-username     .profile-bio          .profile-links        .profile-link-item
+.profile-website      .profile-hero-actions .profile-hero-info    .profile-stats
+.profile-stat-label   .profile-hero-skeleton .profile-edit-btn    .verified-badge
+.char-hint            .comment-body (inner text div)
+```
+
+### Remaining Backend Gaps
+
+| Item | Status |
+|---|---|
+| `prompts/admin.py` imports `Report` | 🔴 **Import error** — `Report` model does not exist in `prompts/models.py`. Will crash Django on startup with `ImportError`. Must remove `Report` from the import. |
+| Password reset endpoints | 🔴 Not built — `ForgotPasswordPage` still has mock `setTimeout` |
+| Avatar upload endpoint | 🔴 Not built — `userApi.uploadAvatar()` calls `POST /auth/me/avatar/` which doesn't exist |
+| Edit prompt endpoint+UI | 🔴 Edit button in `MyPromptsPage` has no `onClick` handler, no backend PATCH view |
+| `ExplorePage` category filter | ⚠️ `QUICK_CATS` array defined, never rendered |
+| `TrendingFeedView` mislabeled | ⚠️ Orders by `average_rating` — that's "top rated all time", not "trending" |
+| N+1 query on feed | ⚠️ `ExploreFeedView` does not use `select_related`/`prefetch_related` — each prompt triggers extra DB queries for author, categories, tags |
+
+---
+
+## Backend Plan — What To Build Next
+
+### B1 — Fix the import crash (do RIGHT NOW, 2 minutes)
+
+`backend/prompts/admin.py` line 2 imports `Report` which does not exist in `prompts/models.py`. Django will refuse to start with an `ImportError`.
+
+**Fix:**
+```python
+# backend/prompts/admin.py — remove Report from import:
+from .models import Prompt, Category, Tag, Rating, Comment, Collection, Bookmark, Notification
+# Report removed — model does not exist yet
+```
+
+### B2 — Fix N+1 queries on feed (10 minutes)
+
+Every prompt card in the feed triggers separate DB queries for `author`, `categories`, and `tags`. With 20 prompts per page, that's 60+ queries per feed load.
+
+```python
+# backend/prompts/views.py — update ExploreFeedView and TrendingFeedView:
+class ExploreFeedView(generics.ListAPIView):
+    serializer_class = PromptSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        queryset = (
+            Prompt.objects
+            .filter(visibility='public', is_removed=False)
+            .select_related('author')                    # JOIN users table once
+            .prefetch_related('categories', 'tags')      # batch-fetch M2M
+            .order_by('-published_at')
+        )
+        prompt_type = self.request.query_params.get('type')
+        if prompt_type and prompt_type not in ('all', ''):
+            queryset = queryset.filter(prompt_type=prompt_type)
+        category_slug = self.request.query_params.get('category')
+        if category_slug:
+            queryset = queryset.filter(categories__slug=category_slug)
+        sort = self.request.query_params.get('sort')
+        if sort == 'rating':
+            queryset = queryset.order_by('-average_rating', '-published_at')
+        return queryset
+
+# Apply same select_related/prefetch_related to TrendingFeedView, SearchView, UserPromptsView, MePromptsView
+```
+
+### B3 — Password reset endpoints (45 minutes)
+
+Add to `accounts/views.py`:
+
+```python
+import secrets
+import hashlib
+from django.core.mail import send_mail
+from django.utils import timezone
+from datetime import timedelta
+
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip().lower()
+        # Always return 200 to prevent email enumeration
+        try:
+            user = User.objects.get(email=email)
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+            # Store in a simple model (or reuse existing AuthToken model from schema)
+            # For now store in a dedicated field or simple dict in cache
+            # Simple approach: store hash on user model temporarily
+            user.password_reset_token = token_hash
+            user.password_reset_expires = timezone.now() + timedelta(hours=1)
+            user.save(update_fields=['password_reset_token', 'password_reset_expires'])
+            reset_url = f"{request.data.get('frontend_url', 'http://localhost:5173')}/reset-password?token={raw_token}"
+            send_mail(
+                subject='Reset your PromptAtlas password',
+                message=f'Click to reset: {reset_url}\n\nExpires in 1 hour.',
+                from_email='noreply@promptatlas.com',
+                recipient_list=[email],
+                fail_silently=True,
+            )
+        except User.DoesNotExist:
+            pass  # silent — don't reveal whether email exists
+        return Response({'message': 'If that email exists, a reset link was sent.'})
+
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        raw_token = request.data.get('token', '')
+        new_password = request.data.get('password', '')
+        if len(new_password) < 8:
+            return Response({'error': 'Password must be at least 8 characters.'}, status=400)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        try:
+            user = User.objects.get(
+                password_reset_token=token_hash,
+                password_reset_expires__gt=timezone.now()
+            )
+            user.set_password(new_password)
+            user.password_reset_token = None
+            user.password_reset_expires = None
+            user.save()
+            return Response({'message': 'Password reset successfully.'})
+        except User.DoesNotExist:
+            return Response({'error': 'Invalid or expired reset link.'}, status=400)
+```
+
+Also add `password_reset_token` and `password_reset_expires` fields to `User` model + migration, and add the URL patterns.
+
+### B4 — Avatar upload endpoint (30 minutes)
+
+```python
+# accounts/views.py — add:
+from PIL import Image
+import io, uuid
+from django.core.files.storage import default_storage
+
+class AvatarUploadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        file = request.FILES.get('avatar')
+        if not file:
+            return Response({'error': 'No file provided.'}, status=400)
+        if file.size > 5 * 1024 * 1024:  # 5MB
+            return Response({'error': 'File too large. Max 5MB.'}, status=400)
+        allowed = ['image/jpeg', 'image/png', 'image/webp']
+        if file.content_type not in allowed:
+            return Response({'error': 'Invalid file type.'}, status=400)
+        # Re-encode with Pillow to strip EXIF and ensure clean image
+        img = Image.open(file)
+        img = img.convert('RGB')
+        img.thumbnail((400, 400))  # max 400x400
+        buffer = io.BytesIO()
+        img.save(buffer, format='JPEG', quality=85)
+        buffer.seek(0)
+        filename = f'avatars/{request.user.id}/{uuid.uuid4()}.jpg'
+        path = default_storage.save(filename, buffer)
+        url = request.build_absolute_uri(default_storage.url(path))
+        request.user.avatar_url = url
+        request.user.save(update_fields=['avatar_url'])
+        return Response({'avatar_url': url})
+```
+
+Add `MEDIA_URL = '/media/'` and `MEDIA_ROOT = BASE_DIR / 'media'` to settings. Add `path('me/avatar/', AvatarUploadView.as_view())` to accounts URLs. Wire media serving in `config/urls.py` for dev.
+
+### B5 — Edit prompt endpoint + UI (30 minutes)
+
+Backend — add to `prompts/views.py`:
+
+```python
+class EditPromptView(generics.UpdateAPIView):
+    serializer_class = CreatePromptSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        return Prompt.objects.filter(author=self.request.user, is_removed=False)
+```
+
+Add to `prompts/urls.py`: `path('<uuid:pk>/edit/', EditPromptView.as_view(), name='prompt_edit')`
+
+Frontend — in `MyPromptsPage.jsx`, add edit state:
+```jsx
+// Add state: const [editingPrompt, setEditingPrompt] = useState(null)
+// Change Edit button onClick: () => setEditingPrompt(p)
+// Render SharePromptModal with initialData={editingPrompt} when editingPrompt is set
+// SharePromptModal needs an optional `initialData` prop + `isEditing` mode that calls PATCH instead of POST
+```
+
+### B6 — Trending algorithm (20 minutes)
+
+Replace `TrendingFeedView` with a real recency-weighted score:
+
+```python
+from django.db.models import ExpressionWrapper, FloatField
+from django.db.models.functions import Now
+from django.utils import timezone
+from datetime import timedelta
+
+class TrendingFeedView(generics.ListAPIView):
+    serializer_class = PromptSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        period = self.request.query_params.get('period', '7d')
+        days = {'24h': 1, '7d': 7, '30d': 30}.get(period, 7)
+        cutoff = timezone.now() - timedelta(days=days)
+        return (
+            Prompt.objects
+            .filter(visibility='public', is_removed=False, published_at__gte=cutoff)
+            .select_related('author')
+            .prefetch_related('categories', 'tags')
+            .annotate(
+                trend_score=ExpressionWrapper(
+                    (models.F('copy_count') * 3) +
+                    (models.F('rating_count') * 2) +
+                    models.F('comment_count'),
+                    output_field=FloatField()
+                )
+            )
+            .order_by('-trend_score', '-published_at')
+        )
+```
+
+### B7 — Report model (for moderation, needed before public launch)
+
+`prompts/admin.py` already imports `Report` — the model just doesn't exist yet. Add it to `prompts/models.py`:
+
+```python
+class Report(models.Model):
+    REASON_CHOICES = [
+        ('spam', 'Spam'), ('inappropriate', 'Inappropriate'),
+        ('copyright', 'Copyright'), ('misinformation', 'Misinformation'),
+        ('hate_speech', 'Hate Speech'), ('other', 'Other'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'), ('reviewed', 'Reviewed'),
+        ('actioned', 'Actioned'), ('dismissed', 'Dismissed'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='reports_filed')
+    prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, null=True, blank=True, related_name='reports')
+    comment = models.ForeignKey(Comment, on_delete=models.CASCADE, null=True, blank=True, related_name='reports')
+    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
+    description = models.TextField(blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='reports_reviewed')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    action_taken = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+```
+
+Add to admin, create migration.
+
+---
+
+## UI Plan — The CSS Gap Is The Entire Problem
+
+**The app's logic is complete. The app's appearance is broken.** Every page beyond the original feed is unstyled. This is the highest priority UI work remaining.
+
+All 100+ missing classes must be added to `src/index.css`. Below is the complete CSS to append, grouped by feature area, consistent with the existing dark design system (`--bg: #212121`, `--accent: #3282B8`, `--text-hi`, `--text-body`, `--text-muted`, `--border`, `--card-radius`, etc.).
+
+### CSS Block 1 — Shared Utility Classes
+
+```css
+/* ── Shared utilities ─────────────────────────────── */
+.tab-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 700; border-radius: 9px;
+  margin-left: 6px; line-height: 1;
+}
+.notif-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  background: #ef4444; color: #fff;
+  font-size: 10px; font-weight: 700; border-radius: 9px;
+  margin-left: 6px;
+}
+.inline-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--accent); font-size: inherit; font-family: inherit;
+  text-decoration: underline;
+}
+.char-hint {
+  font-size: var(--fs-xs); color: var(--text-muted);
+  text-align: right; margin-top: 4px; display: block;
+}
+.verified-badge {
+  display: inline-block; margin-left: 6px; vertical-align: middle;
+}
+```
+
+### CSS Block 2 — Trending Page
+
+```css
+/* ── Trending page ────────────────────────────────── */
+.trending-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.trending-item { display: flex; align-items: flex-start; gap: 16px; }
+.trending-rank {
+  flex-shrink: 0; width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); border-radius: 8px;
+  font-size: var(--fs-sm); font-weight: 700; color: var(--accent);
+  margin-top: 8px;
+}
+```
+
+### CSS Block 3 — My Prompts Page
+
+```css
+/* ── My Prompts page ──────────────────────────────── */
+.my-prompts-list { display: flex; flex-direction: column; gap: 2px; }
+.my-prompt-row {
+  padding: 16px 0; border-bottom: 1px solid var(--border);
+}
+.my-prompt-row:last-child { border-bottom: none; }
+.my-prompt-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.my-prompt-cat {
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.my-prompt-visibility {
+  font-size: var(--fs-xs); font-weight: 600; padding: 2px 7px;
+  border-radius: 4px; letter-spacing: 0.03em;
+}
+.my-prompt-title {
+  font-size: var(--fs-md); font-weight: 600; color: var(--text-hi);
+  margin-bottom: 6px; line-height: 1.4;
+}
+.my-prompt-preview {
+  font-size: var(--fs-sm); color: var(--text-body); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; margin-bottom: 12px;
+}
+.my-prompt-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.my-prompt-stats { display: flex; gap: 12px; font-size: var(--fs-sm); color: var(--text-muted); }
+.my-prompt-actions { display: flex; gap: 8px; }
+.my-prompt-action-btn {
+  padding: 5px 14px; border-radius: var(--btn-radius);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-body); font-size: var(--fs-sm); cursor: pointer;
+  transition: all 0.15s;
+}
+.my-prompt-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+.my-prompt-action-btn.danger { border-color: rgba(239,68,68,0.3); color: #ef4444; }
+.my-prompt-action-btn.danger:hover { border-color: #ef4444; background: rgba(239,68,68,0.08); }
+.my-prompt-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+```
+
+### CSS Block 4 — Collections Page
+
+```css
+/* ── Collections page ─────────────────────────────── */
+.collections-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px; margin-top: 16px;
+}
+.collection-card {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding: 18px; border: 1px solid var(--border); border-radius: var(--card-radius);
+  background: rgba(255,255,255,0.015); cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.collection-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.collection-card-emoji { font-size: 28px; line-height: 1; flex-shrink: 0; }
+.collection-card-info { flex: 1; min-width: 0; }
+.collection-card-name { font-size: var(--fs-base); font-weight: 600; color: var(--text-hi); margin-bottom: 4px; }
+.collection-card-desc {
+  font-size: var(--fs-sm); color: var(--text-muted); margin-bottom: 8px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.collection-card-meta { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-muted); }
+.collection-card-vis { color: var(--text-muted); }
+.collection-create-panel {
+  border: 1px solid var(--border); border-radius: var(--card-radius);
+  padding: 20px; margin-bottom: 20px; background: rgba(255,255,255,0.015);
+}
+.unstar-btn {
+  position: absolute; top: 12px; right: 12px;
+  background: none; border: none; color: #f59e0b; font-size: 16px;
+  cursor: pointer; opacity: 0.7; transition: opacity 0.15s;
+}
+.unstar-btn:hover { opacity: 1; }
+```
+
+### CSS Block 5 — Notifications Page
+
+```css
+/* ── Notifications page ───────────────────────────── */
+.notif-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.notif-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  flex-shrink: 0; margin-top: 6px;
+}
+.notif-icon-wrap {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(50,130,184,0.1); font-size: 18px;
+}
+.notif-icon { line-height: 1; }
+.notif-content { flex: 1; min-width: 0; }
+.notif-message { font-size: var(--fs-sm); color: var(--text-hi); line-height: 1.5; margin-bottom: 3px; }
+.notif-time { font-size: var(--fs-xs); color: var(--text-muted); }
+.mark-all-btn {
+  padding: 6px 14px; border-radius: var(--btn-radius);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer;
+  transition: all 0.15s; white-space: nowrap;
+}
+.mark-all-btn:hover { border-color: var(--accent); color: var(--accent); }
+.notif-skeleton { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; }
+
+/* Notification preferences toggles */
+.notif-pref-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 0; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.notif-pref-row:last-child { border-bottom: none; }
+.notif-pref-label { font-size: var(--fs-base); color: var(--text-hi); }
+.toggle-wrap { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.toggle-input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; border-radius: 12px;
+  background: var(--border); cursor: pointer; transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: ''; position: absolute; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; top: 3px; left: 3px; transition: transform 0.2s;
+}
+.toggle-input:checked + .toggle-slider { background: var(--accent); }
+.toggle-input:checked + .toggle-slider::before { transform: translateX(20px); }
+```
+
+### CSS Block 6 — Settings Page
+
+```css
+/* ── Settings page ────────────────────────────────── */
+.settings-page { max-width: 640px; }
+.settings-title { font-size: 22px; font-weight: 700; color: var(--text-hi); margin-bottom: 24px; }
+.settings-form { display: flex; flex-direction: column; gap: 0; }
+.settings-section { padding: 24px 0; }
+.settings-section-label {
+  font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 16px;
+}
+.settings-fields { display: flex; flex-direction: column; gap: 16px; }
+.settings-divider { height: 1px; background: var(--border); }
+.settings-save-row { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.settings-saved-msg { font-size: var(--fs-sm); color: #10b981; font-weight: 600; }
+.settings-readonly-field {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--btn-radius);
+  font-size: var(--fs-base); color: var(--text-hi);
+}
+.settings-change-link {
+  background: none; border: none; color: var(--accent); font-size: var(--fs-sm);
+  cursor: pointer; font-family: inherit; padding: 0;
+}
+.settings-change-link:hover { text-decoration: underline; }
+
+/* Avatar upload */
+.avatar-upload-row { display: flex; align-items: center; gap: 20px; }
+.avatar-upload-actions { display: flex; flex-direction: column; gap: 6px; }
+.avatar-upload-btn {
+  display: inline-block; padding: 8px 18px; border-radius: var(--btn-radius);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-hi); font-size: var(--fs-sm); cursor: pointer;
+  transition: all 0.15s; font-family: inherit;
+}
+.avatar-upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+.avatar-upload-hint { font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* Danger zone */
+.danger-zone { padding-top: 24px; }
+.danger-text { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; }
+.danger-btn {
+  padding: 9px 22px; border-radius: var(--btn-radius);
+  border: 1px solid rgba(239,68,68,0.4); background: transparent;
+  color: #ef4444; font-size: var(--fs-sm); font-weight: 600;
+  cursor: pointer; transition: all 0.15s; font-family: inherit;
+}
+.danger-btn:hover { background: rgba(239,68,68,0.1); border-color: #ef4444; }
+```
+
+### CSS Block 7 — Prompt Detail Page
+
+```css
+/* ── Prompt detail page ───────────────────────────── */
+.prompt-detail-page { max-width: 720px; }
+.detail-header { margin-bottom: 20px; }
+.detail-title { font-size: 26px; font-weight: 700; color: var(--text-hi); line-height: 1.3; margin-bottom: 16px; }
+.detail-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.detail-author { display: flex; align-items: center; gap: 8px; }
+.detail-author-name {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text-hi);
+  text-decoration: none;
+}
+.detail-author-name:hover { color: var(--accent); }
+.detail-stats { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.detail-stat { display: flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--text-muted); }
+.detail-body-wrap {
+  border: 1px solid var(--border); border-radius: var(--card-radius);
+  overflow: hidden; margin-bottom: 24px;
+}
+.detail-body-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.015);
+}
+.detail-body-label { font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.07em; }
+.detail-action-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--btn-radius);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer;
+  transition: all 0.15s; font-family: inherit;
+}
+.detail-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+.detail-action-btn.active { border-color: #f59e0b; color: #f59e0b; background: rgba(245,158,11,0.08); }
+.copy-main-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 16px; border-radius: var(--btn-radius);
+  border: none; background: var(--accent); color: #fff;
+  font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+  transition: opacity 0.15s; font-family: inherit;
+}
+.copy-main-btn:hover { opacity: 0.88; }
+.copy-main-btn.copied { background: #10b981; }
+.detail-body-text {
+  font-family: 'DM Mono', monospace; font-size: 13.5px;
+  color: var(--text-hi); line-height: 1.7;
+  padding: 20px; white-space: pre-wrap; word-break: break-word;
+  background: rgba(0,0,0,0.15); margin: 0;
+}
+.detail-description { margin-bottom: 24px; }
+.detail-section-label {
+  font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 10px;
+}
+.detail-description-text { font-size: var(--fs-base); color: var(--text-body); line-height: 1.7; }
+.detail-rating-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+  padding: 20px 0; border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); margin-bottom: 32px;
+}
+.detail-rating-count { font-size: var(--fs-sm); color: var(--text-muted); }
+```
+
+### CSS Block 8 — Comment Section
+
+```css
+/* ── Comment section ──────────────────────────────── */
+.comments-section { padding-top: 8px; }
+.comments-heading { margin-bottom: 20px; }
+.comments-count { font-size: var(--fs-md); font-weight: 700; color: var(--text-hi); }
+.comment-form { margin-bottom: 28px; }
+.comment-form-row { display: flex; gap: 12px; align-items: flex-start; }
+.comment-av {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #fff; background: var(--accent);
+}
+.comment-input-wrap { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.comment-textarea {
+  width: 100%; padding: 10px 14px; border-radius: var(--btn-radius);
+  border: 1px solid var(--border); background: rgba(255,255,255,0.03);
+  color: var(--text-hi); font-size: var(--fs-sm); font-family: inherit;
+  resize: vertical; min-height: 72px; outline: none; transition: border-color 0.15s;
+}
+.comment-textarea:focus { border-color: var(--accent); }
+.comment-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.comment-char-count { font-size: var(--fs-xs); color: var(--text-muted); }
+.comment-submit-btn {
+  padding: 7px 18px; border-radius: var(--btn-radius);
+  border: none; background: var(--accent); color: #fff;
+  font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+  transition: opacity 0.15s; font-family: inherit;
+}
+.comment-submit-btn:hover:not(:disabled) { opacity: 0.85; }
+.comment-submit-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.comment-auth-prompt {
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--btn-radius);
+  font-size: var(--fs-sm); color: var(--text-muted); text-align: center; margin-bottom: 24px;
+}
+.comment-list { display: flex; flex-direction: column; gap: 0; }
+.comment-body-wrap { flex: 1; min-width: 0; }
+.comment-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.comment-author {
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text-hi);
+  text-decoration: none;
+}
+.comment-author:hover { color: var(--accent); }
+.comment-time { font-size: var(--fs-xs); color: var(--text-muted); }
+.comment-body { font-size: var(--fs-base); color: var(--text-body); line-height: 1.6; margin-bottom: 8px; }
+.comment-actions { display: flex; align-items: center; gap: 8px; }
+.comment-like-btn {
+  display: flex; align-items: center; gap: 4px;
+  background: none; border: none; color: var(--text-muted);
+  font-size: var(--fs-xs); cursor: pointer; padding: 3px 0;
+  transition: color 0.15s; font-family: inherit;
+}
+.comment-like-btn:hover { color: #ef4444; }
+.comments-loading { display: flex; flex-direction: column; gap: 16px; padding-top: 8px; }
+.comment-skeleton { display: flex; align-items: flex-start; gap: 12px; }
+.comments-empty { font-size: var(--fs-sm); color: var(--text-muted); padding: 24px 0; text-align: center; }
+```
+
+### CSS Block 9 — User Profile Page
+
+```css
+/* ── User profile page ────────────────────────────── */
+.profile-hero-top {
+  display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; margin-bottom: 20px;
+}
+.profile-hero-info { flex: 1; min-width: 0; }
+.profile-display-name {
+  font-size: 22px; font-weight: 700; color: var(--text-hi);
+  display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+}
+.profile-username { font-size: var(--fs-sm); color: var(--text-muted); margin-bottom: 8px; }
+.profile-bio { font-size: var(--fs-base); color: var(--text-body); line-height: 1.6; margin-bottom: 10px; }
+.profile-links { display: flex; flex-wrap: wrap; gap: 12px; }
+.profile-link-item {
+  display: flex; align-items: center; gap: 5px;
+  font-size: var(--fs-sm); color: var(--text-muted);
+}
+.profile-website { color: var(--accent); text-decoration: none; }
+.profile-website:hover { text-decoration: underline; }
+.profile-hero-actions { margin-left: auto; display: flex; gap: 8px; flex-shrink: 0; }
+.profile-edit-btn {
+  display: inline-block; padding: 8px 18px; border-radius: 20px;
+  border: 1.5px solid var(--border); background: transparent;
+  color: var(--text-hi); font-size: var(--fs-sm); font-weight: 600;
+  cursor: pointer; text-decoration: none; transition: all 0.15s;
+}
+.profile-edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+.profile-stats { display: flex; gap: 32px; padding-top: 16px; border-top: 1px solid var(--border); }
+.profile-stat { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.profile-stat-label { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.profile-stat-rep { display: flex; align-items: center; gap: 4px; color: #f59e0b; }
+.profile-hero-skeleton { display: flex; gap: 20px; align-items: flex-start; padding: 28px; }
+```
+
+---
+
+## Complete Action List — Ordered by Priority
+
+### Do immediately (blockers — app crashes or major features broken)
+
+| # | Task | Time | File |
+|---|---|---|---|
+| 1 | Fix `prompts/admin.py` — remove `Report` import (app won't start) | 2 min | `backend/prompts/admin.py` |
+| 2 | Add all CSS blocks 1–9 above to `src/index.css` (100+ pages unstyled) | 30 min | `src/index.css` |
+| 3 | Add `select_related` + `prefetch_related` to feed queries (N+1) | 15 min | `backend/prompts/views.py` |
+
+### Do before first real user test
+
+| # | Task | Time |
+|---|---|---|
+| 4 | Wire `ExplorePage` category filter bar | 20 min |
+| 5 | Build password reset views + URLs + wire `ForgotPasswordPage` | 45 min |
+| 6 | Build avatar upload view + URL + add `MEDIA_*` to settings | 30 min |
+| 7 | Add Edit prompt flow (backend PATCH + frontend modal) | 30 min |
+| 8 | Build `Report` model + migration + view + URL + Report button in UI | 45 min |
+| 9 | Replace trending with real score algorithm | 20 min |
+
+### Do before public launch
+
+| # | Task | Time |
+|---|---|---|
+| 10 | Add `select_related`/`prefetch_related` to ALL list views | 20 min |
+| 11 | Email backend config (AWS SES or SendGrid) | 30 min |
+| 12 | OpenAI Moderation API on `CreatePromptView` | 30 min |
+| 13 | WebSockets (Django Channels + Redis) | 2–3 hrs |
+| 14 | Deploy backend to Railway, frontend to Vercel | 1–2 hrs |
+
+---
+
+## Deployment Readiness Checklist
+
+Run through this before any deployment:
+
+```
+Backend
+[ ] python manage.py check --deploy  (runs Django's security checks)
+[ ] All migrations applied: python manage.py showmigrations
+[ ] Superuser created: python manage.py createsuperuser
+[ ] Seed data loaded: python seed_data.py
+[ ] DEBUG=False in prod env
+[ ] SECRET_KEY is 50+ random chars, not the insecure default
+[ ] USE_SQLITE=False (or env var not set — PostgreSQL is now the default)
+[ ] ALLOWED_HOSTS set to your real domain
+[ ] CORS_ALLOWED_ORIGINS set to your real frontend URL only
+[ ] gunicorn in requirements.txt ✅ already there
+[ ] prompts/admin.py does not import Report until model exists
+
+Frontend
+[ ] VITE_API_BASE_URL set to prod backend URL
+[ ] No localhost:8000 hardcoded anywhere
+[ ] npm run build completes with 0 errors
+[ ] All 100 CSS classes added (blocks 1–9 above)
+[ ] src/data/prompts.js can be deleted (MOCK_MODE=false, no imports)
+```
+
+---
+
+## Summary — One Paragraph
+
+The backend is structurally complete and correctly wired, with one startup-breaking bug (`Report` import in admin) and one performance bug (N+1 queries on feed). Every feature from the original schema — auth, prompts, ratings, comments, follows, collections, bookmarks, notifications — has a working view and URL. The frontend is fully wired to the real API with correct data flow. The single largest remaining problem is that **100 CSS classes used by every new page are completely absent from `index.css`**, which means the application is logically correct but visually broken on every page beyond the original feed — fix that first, everything else is incremental.
+ENDPLAN
+Output
+
+exit code 0

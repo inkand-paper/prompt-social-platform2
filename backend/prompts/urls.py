@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    ExploreFeedView, TrendingFeedView, PromptDetailView, CreatePromptView, 
+    ExploreFeedView, TrendingFeedView, PromptDetailView, CreatePromptView, EditPromptView, PromptDestroyView,
     CopyEventView, TrendingTagsView, CategoriesView, TopPromptersView,
     RatingCreateUpdateView, CommentListCreateView, SearchView,
     BookmarkListCreateView, BookmarkDestroyView,
@@ -33,5 +33,7 @@ urlpatterns = [
     
     # Prompt CRUD
     path('create/', CreatePromptView.as_view(), name='prompt_create'),
+    path('<uuid:pk>/edit/', EditPromptView.as_view(), name='prompt_edit'),
+    path('<uuid:pk>/', PromptDestroyView.as_view(), name='prompt_delete'),
     path('<slug:slug>/', PromptDetailView.as_view(), name='prompt_detail'),
 ]

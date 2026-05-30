@@ -34,8 +34,8 @@ export function normalizePrompt(raw) {
 }
 
 // ── GET /prompts/explore/ ─────────────────────────────────────
-export async function fetchExploreFeed({ page = 1, type = 'all', sort = 'new' }) {
-  const { data } = await api.get('/prompts/explore/', { params: { page, type, sort } })
+export async function fetchExploreFeed({ page = 1, type = 'all', sort = 'new', category = '' }) {
+  const { data } = await api.get('/prompts/explore/', { params: { page, type, sort, category } })
   return {
     ...data,
     results: (data.results || []).map(normalizePrompt),

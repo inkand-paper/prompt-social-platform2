@@ -122,3 +122,7 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://localhost:4173').split(',')
 CORS_ALLOW_CREDENTIALS = True
+
+# Media
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'

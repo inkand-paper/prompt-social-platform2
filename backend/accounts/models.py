@@ -45,6 +45,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     ban_reason = models.TextField(blank=True, null=True)
     banned_at = models.DateTimeField(null=True, blank=True)
     
+    # Auth
+    password_reset_token = models.CharField(max_length=64, blank=True, null=True)
+    password_reset_expires = models.DateTimeField(null=True, blank=True)
+    
     # Metadata
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)

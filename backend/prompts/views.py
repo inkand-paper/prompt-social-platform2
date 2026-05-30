@@ -1,8 +1,13 @@
+import os
+from openai import OpenAI
 from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db import models
-from django.db.models import Count, Avg, F
+from django.db.models import Count, Avg, F, Q, ExpressionWrapper, FloatField
+from django.db.models.functions import Now
+from django.utils import timezone
+from datetime import timedelta
 from accounts.models import User
 from accounts.serializers import UserSerializer
 from .models import Prompt, Category, Tag, Rating, Comment, Bookmark, Notification, Collection
@@ -17,9 +22,15 @@ class ExploreFeedView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        queryset = Prompt.objects.filter(visibility='public', is_removed=False).order_by('-published_at')
+        queryset = (
+            Prompt.objects
+            .filter(visibility='public', is_removed=False)
+            .select_related('author')
+            .prefetch_related('categories', 'tags')
+            .order_by('-published_at')
+        )
         prompt_type = self.request.query_params.get('type')
-        if prompt_type and prompt_type != 'all':
+        if prompt_type and prompt_type != 'all' and prompt_type != '':
             queryset = queryset.filter(prompt_type=prompt_type)
         category_slug = self.request.query_params.get('category')
         if category_slug:
@@ -34,10 +45,27 @@ class TrendingFeedView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        return Prompt.objects.filter(visibility='public', is_removed=False).order_by('-average_rating', '-published_at')
+        period = self.request.query_params.get('period', '7d')
+        days = {'24h': 1, '7d': 7, '30d': 30}.get(period, 7)
+        cutoff = timezone.now() - timedelta(days=days)
+        return (
+            Prompt.objects
+            .filter(visibility='public', is_removed=False, published_at__gte=cutoff)
+            .select_related('author')
+            .prefetch_related('categories', 'tags')
+            .annotate(
+                trend_score=ExpressionWrapper(
+                    (F('copy_count') * 3) +
+                    (F('rating_count') * 2) +
+                    F('comment_count'),
+                    output_field=FloatField()
+                )
+            )
+            .order_by('-trend_score', '-published_at')
+        )
 
 class PromptDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Prompt.objects.filter(is_removed=False)
+    queryset = Prompt.objects.filter(is_removed=False).select_related('author').prefetch_related('categories', 'tags')
     serializer_class = PromptSerializer
     lookup_field = 'slug'
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
@@ -50,6 +78,41 @@ class PromptDetailView(generics.RetrieveUpdateDestroyAPIView):
 class CreatePromptView(generics.CreateAPIView):
     serializer_class = CreatePromptSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        title = serializer.validated_data.get('title', '')
+        body = serializer.validated_data.get('body', '')
+        desc = serializer.validated_data.get('description', '')
+        full_text = f"{title}\n{body}\n{desc}"
+        
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if api_key:
+            try:
+                client = OpenAI(api_key=api_key)
+                response = client.moderations.create(input=full_text)
+                if response.results[0].flagged:
+                    from rest_framework.exceptions import ValidationError
+                    raise ValidationError("Your prompt was flagged by our safety system. Please review the community guidelines.")
+            except Exception as e:
+                # Log error but don't block if API is down
+                print(f"Moderation API error: {e}")
+        
+        serializer.save(author=self.request.user)
+
+class EditPromptView(generics.UpdateAPIView):
+    serializer_class = CreatePromptSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        return Prompt.objects.filter(author=self.request.user, is_removed=False)
+
+class PromptDestroyView(generics.DestroyAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        return Prompt.objects.filter(author=self.request.user)
 
 class CopyEventView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -126,12 +189,17 @@ class SearchView(generics.ListAPIView):
         q = self.request.query_params.get('q', '')
         if not q:
             return Prompt.objects.none()
-        queryset = Prompt.objects.filter(visibility='public', is_removed=False)
+        queryset = (
+            Prompt.objects
+            .filter(visibility='public', is_removed=False)
+            .select_related('author')
+            .prefetch_related('categories', 'tags')
+        )
         queryset = queryset.filter(
-            models.Q(title__icontains=q) | 
-            models.Q(description__icontains=q) | 
-            models.Q(body__icontains=q) |
-            models.Q(tags__name__icontains=q)
+            Q(title__icontains=q) | 
+            Q(description__icontains=q) | 
+            Q(body__icontains=q) |
+            Q(tags__name__icontains=q)
         ).distinct()
         prompt_type = self.request.query_params.get('type')
         if prompt_type and prompt_type != 'all':

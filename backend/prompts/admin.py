@@ -1,5 +1,21 @@
 from django.contrib import admin
+from django.utils import timezone
 from .models import Prompt, Category, Tag, Rating, Comment, Collection, Bookmark, Notification, Report
+
+@admin.register(Report)
+class ReportAdmin(admin.ModelAdmin):
+    list_display = ('reporter', 'prompt', 'comment', 'reason', 'status', 'created_at')
+    list_filter = ('status', 'reason')
+    search_fields = ('reporter__username', 'description')
+    actions = ['dismiss_reports', 'action_reports']
+
+    def dismiss_reports(self, request, queryset):
+        queryset.update(status='dismissed', reviewed_by=request.user, reviewed_at=timezone.now())
+    dismiss_reports.short_description = 'Dismiss selected reports'
+
+    def action_reports(self, request, queryset):
+        queryset.update(status='actioned', reviewed_by=request.user, reviewed_at=timezone.now())
+    action_reports.short_description = 'Action selected reports'
 
 @admin.register(Prompt)
 class PromptAdmin(admin.ModelAdmin):

@@ -1,5 +1,4 @@
-// src/pages/ExplorePage.jsx — Explore feed with category bar
-
+import { useState } from 'react'
 import Feed from '../components/Feed'
 
 const QUICK_CATS = [
@@ -13,9 +12,22 @@ const QUICK_CATS = [
 ]
 
 export default function ExplorePage() {
+  const [selectedCat, setSelectedCat] = useState('')
+
   return (
     <>
-      <Feed />
+      <div className="cat-filter-bar">
+        {QUICK_CATS.map((cat) => (
+          <button
+            key={cat.value}
+            className={`cat-pill ${selectedCat === cat.value ? 'active' : ''}`}
+            onClick={() => setSelectedCat(cat.value)}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+      <Feed category={selectedCat} />
     </>
   )
 }

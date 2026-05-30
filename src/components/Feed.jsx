@@ -58,7 +58,7 @@ function VideosTab() {
 }
 
 // ── Main Feed ────────────────────────────────────────────────
-export default function Feed() {
+export default function Feed({ category = '' }) {
   const [activeTab, setActiveTab] = useState('All')
   const [sortedByRating, setSorted] = useState(false)
 
@@ -71,6 +71,7 @@ export default function Feed() {
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = useFeed({
     type: activeTab === 'Videos' ? 'all' : typeParam,
     sort: sortParam,
+    category,
   })
 
   const allItems = data?.pages.flatMap((page) => page.results) ?? []
