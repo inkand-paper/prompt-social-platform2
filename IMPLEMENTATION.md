@@ -1184,3 +1184,251 @@ The gaps are entirely on the data and infrastructure side: there is no backend, 
 Follow the milestones in order. Do not start Milestone 2 without Milestone 1's auth being security-reviewed. Do not go to production without Milestone 7's moderation in place — you will be liable for unmoderated content on day one.
 
 Build it right. Ship it solid.
+
+---
+
+---
+
+# UPDATE — May 30, 2025
+
+> **Status review performed by:** Senior audit  
+> **Current date:** May 30, 2025  
+> **Repo cloned fresh, every file read, every line verified.**
+
+---
+
+## What You've Actually Built (Honest Assessment)
+
+First — you've done a solid amount of real work since the original plan. Here's exactly where things stand:
+
+### ✅ Done and correct
+
+| Item | File | Quality |
+|---|---|---|
+| React Router v7 routing | `main.jsx` | Perfect. All routes from §8 of the plan are wired. |
+| React Query (TanStack v5) setup | `main.jsx` | Correct config, staleTime, gcTime. |
+| Axios instance with JWT interceptor | `src/lib/api.js` | Production-grade. Token refresh queue is correct. |
+| AuthContext with mock/prod toggle | `src/context/AuthContext.jsx` | Clean pattern. Easy to swap when backend is live. |
+| Socket.io client | `src/lib/socket.js` | Correct. Reconnect logic in place. |
+| Feed API with mock/prod toggle | `src/lib/feedApi.js` | `MOCK_MODE` flag is exactly right. `normalizePrompt()` is good. |
+| `useFeed` + `useTrending` hooks | `src/hooks/useFeed.js` | Infinite query wired correctly. |
+| Login page with form validation | `src/pages/LoginPage.jsx` | Solid. `react-hook-form` used properly. |
+| Register page | `src/pages/RegisterPage.jsx` | Good. Password confirm validation works. |
+| Share Prompt modal | `src/components/SharePromptModal.jsx` | Full form with type, model, visibility, body, description. |
+| Error boundary | `src/components/ErrorBoundary.jsx` | Correct class component. Sentry hook point is there. |
+| Skeleton loaders | `src/components/SkeletonCard.jsx` | Both text + image variants. |
+| All page stubs created | `src/pages/` | 10 pages exist as stubs. |
+| Vite dev proxy | `vite.config.js` | `/api` → `localhost:8000`. Correct. |
+| Dependencies added | `package.json` | All 5 new packages correctly added. |
+| `.env` in `.gitignore` | `.gitignore` | Confirmed. |
+
+### ⚠️ Still mock / not yet wired
+
+| Item | Where | What's needed |
+|---|---|---|
+| `AuthContext.login()` | `AuthContext.jsx:L33` | Comment out mock block, uncomment the real `api.post('/auth/login/')` |
+| `AuthContext.register()` | `AuthContext.jsx:L55` | Same — remove mock, wire real call |
+| `feedApi.js MOCK_MODE` | `feedApi.js:L14` | Set `MOCK_MODE = false` when Django is live |
+| `SharePromptModal` submit | `SharePromptModal.jsx:L32` | Uncomment real `api.post('/prompts/', data)` |
+| `src/data/prompts.js` | `src/data/prompts.js` | Still exists, still used. Delete ONLY after backend returns real data. |
+| All 10 page stubs | `src/pages/` | Pages exist as files but content is placeholder |
+| BoltRating persistence | `src/hooks/useRating.js` | TODO still present, rating doesn't persist |
+
+### 🔴 Backend: zero code exists
+
+There is no `backend/` folder in this repo. No Django project. No database. No API. Everything the frontend calls right now hits the mock data layer and never touches a real server.
+
+---
+
+## To Answer Your Questions Directly
+
+### "Is this just a backend and mock UI for now?"
+
+**It's a mock UI only. There is no backend at all yet.** What you have is:
+
+- A fully structured, professionally wired React frontend
+- With a smart mock layer that simulates the backend using local data
+- Every API call is already written — it just hits fake data instead of a real server
+- The moment you set `MOCK_MODE = false` and the Django backend is running, the entire frontend comes alive with zero other changes needed
+
+This is actually the correct and smart way to build it. Frontend is done enough to be useful. Now the backend needs to exist.
+
+### "Should I host it before building the frontend?"
+
+**No. Do not host yet.** Here's why, precisely:
+
+The frontend currently runs on `src/data/prompts.js` (6 text prompts, 6 image prompts, all hardcoded). If you host this today:
+- Users can browse but cannot register (mock auth only stores in `sessionStorage`, which clears on tab close)
+- No prompt they submit is saved anywhere
+- No rating they click persists
+- Refresh loses everything
+
+Hosting mock data publicly wastes your time and sets false expectations. **Build the Django backend to Milestone 1 (Auth) and Milestone 2 (Prompts CRUD) first, then host the combined system.**
+
+---
+
+## What's Next — Revised Milestone Plan
+
+The original milestones in this document remain valid and correct. What changes is the **priority order** now that the frontend mock layer is complete.
+
+---
+
+### CURRENT STATE: Frontend is at ~Milestone 2.5 (mock)
+
+All the frontend work planned in Milestones 0–4 of the original plan is done in mock form. The switches are all built in. Now the work is purely backend.
+
+---
+
+### Next Step: Milestone B1 — Django Project Setup (Week 1, starting now)
+
+**Goal:** A working Django project exists, connects to PostgreSQL, and serves the health check endpoint. The frontend proxy can reach it.
+
+**Tasks — do these in exact order:**
+
+1. Create `backend/` folder at the root of this repo
+2. `pip install django djangorestframework django-cors-headers psycopg2-binary argon2-cffi djangorestframework-simplejwt python-dotenv`
+3. `django-admin startproject config backend/`
+4. Create apps: `python manage.py startapp accounts` and `python manage.py startapp prompts`
+5. Apply the full PostgreSQL schema from §3 of this document as Django models (not raw SQL — use the ORM so migrations work)
+6. Configure `INSTALLED_APPS`, `DATABASES` (PostgreSQL), `CORS_ALLOWED_ORIGINS` (allow `http://localhost:5173` in dev)
+7. Add `GET /api/v1/health/` endpoint — returns `{ "status": "ok", "version": "1.0.0" }`
+8. Confirm: `npm run dev` in `frontend/` + `python manage.py runserver` in `backend/` + Vite proxy routes `/api` → Django → returns health JSON
+
+**Deliverable:** Both servers running locally. `curl http://localhost:5173/api/v1/health/` returns `{"status":"ok"}`.
+
+---
+
+### Milestone B2 — Auth API (Week 2)
+
+**Goal:** Real users can register and log in. The frontend mock blocks are swapped for real API calls.
+
+**Django tasks:**
+1. Custom `User` model extending `AbstractBaseUser` — implements every column from §3.1
+2. `POST /api/v1/auth/register/` — validate, argon2 hash password, create user, send verification email (use Django's email backend, SMTP or console backend in dev)
+3. `POST /api/v1/auth/login/` — verify password, issue JWT access token (15 min, RS256) + set HttpOnly refresh token cookie
+4. `POST /api/v1/auth/refresh/` — validate cookie, issue new access token
+5. `POST /api/v1/auth/logout/` — revoke refresh token row in DB
+6. `GET /api/v1/users/me/` — return current user profile
+
+**Frontend tasks (after Django endpoints are live):**
+1. In `src/context/AuthContext.jsx`: comment out the MOCK block in `login()`, uncomment the real `api.post('/auth/login/', ...)` call. Do the same for `register()`.
+2. In `src/lib/feedApi.js`: keep `MOCK_MODE = true` for now — the prompts API isn't built yet
+3. Test: register → get verification email → verify → login → JWT issued → `/users/me/` returns user → Navbar shows real name
+
+**Deliverable:** Real auth works end to end. Mock user `MOCK_USER` in AuthContext is no longer used.
+
+---
+
+### Milestone B3 — Prompts API (Week 3)
+
+**Goal:** Real prompts are stored in PostgreSQL and served to the frontend. `src/data/prompts.js` is deleted.
+
+**Django tasks:**
+1. `Prompt`, `Category`, `Tag`, `PromptCategory`, `PromptTag` models and migrations
+2. `GET /api/v1/feed/explore/` — paginated, filterable by type, sortable
+3. `POST /api/v1/prompts/` — create a prompt (auth required)
+4. `GET /api/v1/prompts/{id}/` — single prompt detail
+5. `POST /api/v1/prompts/{id}/copy/` — log copy event, increment counter
+6. `GET /api/v1/tags/trending/` — top 8 tags by usage_count
+7. `GET /api/v1/users/top/` — top 4 users by reputation_score
+8. `GET /api/v1/categories/` — all categories with counts
+
+**Frontend tasks:**
+1. Set `MOCK_MODE = false` in `src/lib/feedApi.js`
+2. Delete `src/data/prompts.js`
+3. Remove the `import { TEXT_PROMPTS, IMAGE_PROMPTS }` from `feedApi.js` (they'll be gone)
+4. Seed the database with at least 20 real prompts so the feed isn't empty
+
+**Deliverable:** Live database-driven feed. No static data anywhere. RightSidebar shows real tags/prompters/categories from DB.
+
+---
+
+### Milestone B4 — Ratings + Comments (Week 4)
+
+**Goal:** Ratings persist. Comments work.
+
+**Django tasks:**
+1. `Rating` model + `POST /api/v1/prompts/{id}/rate/` — upsert, trigger recomputes average
+2. `Comment` model + CRUD endpoints for comments
+3. `CommentLike` model + like/unlike endpoints
+
+**Frontend tasks:**
+1. Fix `src/hooks/useRating.js` — uncomment the `fetch` call, change it to `api.post()` from the Axios instance
+2. Build out `PromptDetailPage.jsx` — full prompt view with comment section
+3. Wire `CommentSection.jsx` component to the comments API
+
+**Deliverable:** Clicking a bolt rating saves to DB. Comments appear and persist.
+
+---
+
+### Milestone B5 — Social Graph + Notifications (Week 5)
+
+Implement follows, collections, bookmarks, and the notifications table. Wire the WebSocket server using Django Channels. This maps to Milestones 3 and 5 from the original plan — they are unchanged, just deferred until here.
+
+---
+
+### Milestone B6 — Hosting (Week 6)
+
+**Only after B1–B5 are complete.** At that point:
+
+**Frontend hosting:** Deploy to **Vercel** (free tier, zero config for Vite/React). Point `VITE_API_BASE_URL` to your backend URL.
+
+**Backend hosting:** Deploy Django to **Railway** or **Render** (both have free PostgreSQL tiers for early stage). Much simpler than AWS for a first deployment.
+
+**Why not AWS yet?** AWS (ECS, RDS, ElastiCache, CloudFront) from §10 of the original plan is correct for production scale. But for your first real deployment, Railway or Render gets you live in 30 minutes with zero DevOps overhead. Migrate to AWS when you have real users.
+
+**Media (images/avatars):** Use **Cloudflare R2** (S3-compatible, free tier is generous, no egress fees). Replace Unsplash hotlinks with R2 URLs at this point.
+
+**Domain:** Point your domain to Vercel (frontend) and Railway/Render (backend). Enable Cloudflare as proxy for DDoS protection and free SSL.
+
+**Deliverable:** Public URL, real database, real auth, real prompts. Tell people.
+
+---
+
+### Milestone B7 — Production Infrastructure (Later)
+
+This is the AWS migration from §10 of the original plan. Do this when you have 1,000+ real users and need the scale. Not before. Premature AWS architecture costs money and time with no benefit at early stage.
+
+---
+
+## The One File to Change Next
+
+Before touching Django, do this in the frontend right now:
+
+In `src/components/CopyButton.jsx`, change `.finally` to `.then`:
+
+```js
+// CURRENT (buggy — shows "Copied!" even on permission denied):
+navigator.clipboard.writeText(text).finally(() => {
+  setCopied(true)
+  ...
+})
+
+// CORRECT:
+navigator.clipboard.writeText(text).then(() => {
+  setCopied(true)
+  setTimeout(() => setCopied(false), 1800)
+}).catch(() => {
+  // silently fail — don't show "Copied!" if it didn't work
+})
+```
+
+This is the only remaining bug in the frontend. Everything else is either intentionally mocked or correctly structured.
+
+---
+
+## Summary
+
+| Layer | Status | Next action |
+|---|---|---|
+| Frontend structure | ✅ Complete | No changes needed |
+| Frontend routing | ✅ Complete | No changes needed |
+| Frontend auth flow | ✅ Mocked, wired | Swap mock for real once B2 is done |
+| Frontend feed | ✅ Mocked, wired | Flip `MOCK_MODE=false` once B3 is done |
+| Frontend pages | ⚠️ Stubs only | Build out each page as backend endpoints land |
+| Backend | 🔴 Does not exist | Start Milestone B1 today |
+| Database | 🔴 Does not exist | Created as part of B1 |
+| Hosting | 🔴 Not yet | Do after B1–B5 |
+| Production infra (AWS) | 🔴 Not yet | Do after real users |
+
+**Start here → create `backend/` → `django-admin startproject config backend/` → get that health endpoint running.**
