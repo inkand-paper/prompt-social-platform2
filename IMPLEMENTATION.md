@@ -1754,3 +1754,509 @@ Only after Priority 1 is done (PostgreSQL running with seeded data). Set `MOCK_M
 ## One Sentence Summary
 
 The architecture is solid and nearly complete — you need to fix 4 settings bugs, reorder 3 URL patterns, add 1 DELETE method, swap 2 mock blocks for real API calls, and wire 1 rating hook, and the app will be fully functional end-to-end on a real PostgreSQL database.
+
+
+---
+
+---
+
+# UPDATE — May 30, 2026 (Second Audit)
+
+> **Full repo re-cloned and every single file read line by line.**
+> This is the most current and accurate status. Previous updates are preserved above.
+
+---
+
+## What Changed Since Last Audit — Every Bug Fixed
+
+Every bug flagged in the previous update has been fixed. Confirmed:
+
+| Previous Bug | Fixed? | Evidence |
+|---|---|---|
+| SQLite instead of PostgreSQL | ✅ Fixed | `settings.py` now has full PostgreSQL config with env vars |
+| `SECRET_KEY` hardcoded | ✅ Fixed | Reads from `os.environ.get('DJANGO_SECRET_KEY', fallback)` |
+| `CORS_ALLOW_ALL_ORIGINS = True` | ✅ Fixed | Now `CORS_ALLOWED_ORIGINS` from env, `CORS_ALLOW_CREDENTIALS = True` |
+| URL route conflict (slug before UUID) | ✅ Fixed | UUID routes (`copy`, `rate`, `comments`) now come before `<slug:slug>/` |
+| `FollowUserView` missing DELETE | ✅ Fixed | Proper `post()` for follow, `delete()` for unfollow |
+| `accounts/urls.py` typo `user_prmpts` | ✅ Fixed | Now `user_prompts` |
+| Rating value not validated | ✅ Fixed | `float(value)` with `0.5 <= value <= 5.0` check |
+| `db.sqlite3` committed to git | ✅ Fixed | `backend/db.sqlite3` now in `.gitignore` |
+| `AuthContext` still mocked | ✅ Fixed | Real `api.post('/auth/login/')` → then `api.get('/auth/me/')` |
+| `useRating.js` TODO never called | ✅ Fixed | Calls `api.post('/prompts/${promptId}/rate/', { value: pos })` with rollback |
+| `feedApi.js MOCK_MODE = true` | ✅ Fixed | `MOCK_MODE = false` |
+| `CopyButton .finally` bug | ✅ Fixed | Uses `.then()/.catch()` with `onCopy` callback |
+
+---
+
+## Full Current State — Every File Audited
+
+### Backend
+
+#### `backend/config/settings.py` — ⚠️ One remaining issue
+All major bugs fixed. One issue remains: `USE_SQLITE` env var pattern is a footgun.
+
+```python
+# CURRENT — dangerous: if you forget to set USE_SQLITE=False in prod, it silently uses SQLite
+if os.environ.get('USE_SQLITE', 'True') == 'True':
+    DATABASES = { 'default': { 'ENGINE': '...sqlite3', ... } }
+```
+
+The default is `'True'` — meaning unless you explicitly set `USE_SQLITE=False`, it always uses SQLite, even in production. This will cause silent data loss if you deploy without setting that env var. **Flip the default:**
+
+```python
+# FIX — default to PostgreSQL, only use SQLite if explicitly requested for local dev:
+if os.environ.get('USE_SQLITE', 'False') == 'True':
+    DATABASES = { 'default': { 'ENGINE': '...sqlite3', ... } }
+```
+
+Also still missing: `rest_framework_simplejwt.token_blacklist` is not in `INSTALLED_APPS`. `BLACKLIST_AFTER_ROTATION = True` is set in `SIMPLE_JWT` but the blacklist app isn't installed — this means token rotation silently fails. Add to `INSTALLED_APPS`:
+
+```python
+'rest_framework_simplejwt.token_blacklist',
+```
+
+Then run `python manage.py migrate` to create the blacklist tables.
+
+#### `backend/accounts/models.py` — ✅ Complete
+All fields present. `User`, `OAuthProvider`, `Follow` — correct and complete.
+
+#### `backend/accounts/serializers.py` — ⚠️ Missing custom JWT serializer
+`TokenObtainPairView` (SimpleJWT default) returns `{ access, refresh }`. The frontend `AuthContext` calls `/auth/me/` after login to get the user object — this works, but costs an extra HTTP round trip on every login. Low priority, fine for now. When you want to optimize: add a `CustomTokenObtainPairSerializer` that embeds the user in the token response.
+
+#### `backend/accounts/views.py` — ✅ Clean
+`RegisterView`, `MeView`, `MePromptsView`, `PublicProfileView`, `UserPromptsView`, `FollowUserView` (with proper `post` + `delete`) — all correct.
+
+#### `backend/accounts/urls.py` — ✅ Clean
+Typo fixed. All routes correct.
+
+#### `backend/prompts/models.py` — ✅ Excellent
+Every model from the schema is implemented. `Prompt`, `Rating`, `Comment`, `Collection`, `CollectionItem`, `Bookmark`, `Notification`, `PromptCopy`, `PromptView`, `Category`, `Tag`.
+
+#### `backend/prompts/serializers.py` — ✅ Good
+All serializers present and correct. `PromptSerializer` nests author + categories + tags.
+
+#### `backend/prompts/views.py` — ⚠️ Three issues
+
+**Issue 1 — `TrendingFeedView` is not trending, it's "top rated"**
+Orders by `average_rating` which never changes based on recency. A prompt from 2 years ago with 5.0 rating beats a new viral prompt. This is misleading — label it correctly until you build real trending logic:
+
+```python
+# CURRENT label: TrendingFeedView
+# ACTUAL behaviour: sorts by highest average_rating (all time)
+# This is fine for now but must be addressed before public launch
+```
+
+Real trending needs: `(copy_count + rating_count + comment_count) weighted by recency`. Implement after you have real user data.
+
+**Issue 2 — `CopyEventView` has a race condition**
+```python
+# CURRENT — read-modify-write without atomic update:
+prompt.copy_count += 1
+prompt.save()
+
+# FIX — use F() expression for atomic increment:
+from django.db.models import F
+Prompt.objects.filter(pk=prompt.pk).update(copy_count=F('copy_count') + 1)
+```
+
+Under concurrent traffic, the current code will drop copy counts (two requests read `copy_count=5`, both write `6`, one increment is lost).
+
+**Issue 3 — `CommentListCreateView` doesn't increment `comment_count`**
+```python
+# CURRENT — creates comment but doesn't update prompt.comment_count
+def perform_create(self, serializer):
+    serializer.save(author=self.request.user, prompt_id=self.kwargs['pk'])
+
+# FIX:
+def perform_create(self, serializer):
+    from django.db.models import F
+    comment = serializer.save(author=self.request.user, prompt_id=self.kwargs['pk'])
+    Prompt.objects.filter(pk=self.kwargs['pk']).update(comment_count=F('comment_count') + 1)
+    return comment
+```
+
+#### `backend/prompts/urls.py` — ✅ Fixed
+UUID routes now correctly precede the slug route.
+
+#### `backend/accounts/admin.py` and `backend/prompts/admin.py` — 🔴 Both empty
+Both admin files contain only `# Register your models here.` — nothing is registered. This means the Django admin panel at `/admin/` is useless: you can log in but see nothing. Before any hosting, register your models:
+
+```python
+# backend/accounts/admin.py
+from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from .models import User, Follow, OAuthProvider
+
+@admin.register(User)
+class UserAdmin(BaseUserAdmin):
+    list_display = ('username', 'email', 'display_name', 'reputation_score', 'is_staff', 'is_banned', 'created_at')
+    list_filter = ('is_staff', 'is_verified', 'is_banned')
+    search_fields = ('username', 'email', 'display_name')
+    ordering = ('-created_at',)
+    fieldsets = BaseUserAdmin.fieldsets + (
+        ('Profile', {'fields': ('display_name', 'bio', 'avatar_url', 'avatar_color', 'website_url', 'location')}),
+        ('Stats', {'fields': ('reputation_score', 'prompt_count', 'follower_count', 'following_count')}),
+        ('Status', {'fields': ('is_verified', 'is_banned', 'ban_reason', 'banned_at')}),
+    )
+    add_fieldsets = (
+        (None, {'classes': ('wide',), 'fields': ('email', 'username', 'display_name', 'password1', 'password2')}),
+    )
+
+@admin.register(Follow)
+class FollowAdmin(admin.ModelAdmin):
+    list_display = ('follower', 'following', 'created_at')
+    search_fields = ('follower__username', 'following__username')
+```
+
+```python
+# backend/prompts/admin.py
+from django.contrib import admin
+from .models import Prompt, Category, Tag, Rating, Comment, Collection, Bookmark, Notification, Report
+
+@admin.register(Prompt)
+class PromptAdmin(admin.ModelAdmin):
+    list_display = ('title', 'author', 'prompt_type', 'visibility', 'average_rating', 'rating_count', 'copy_count', 'is_featured', 'is_removed', 'published_at')
+    list_filter = ('prompt_type', 'visibility', 'is_featured', 'is_removed', 'is_flagged')
+    search_fields = ('title', 'body', 'author__username')
+    ordering = ('-published_at',)
+    actions = ['mark_featured', 'mark_removed']
+
+    def mark_featured(self, request, queryset):
+        from django.utils import timezone
+        queryset.update(is_featured=True, featured_at=timezone.now())
+    mark_featured.short_description = 'Mark selected prompts as featured'
+
+    def mark_removed(self, request, queryset):
+        queryset.update(is_removed=True)
+    mark_removed.short_description = 'Remove selected prompts'
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'emoji', 'prompt_count', 'sort_order')
+    prepopulated_fields = {'slug': ('name',)}
+
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'usage_count')
+    search_fields = ('name',)
+
+@admin.register(Rating)
+class RatingAdmin(admin.ModelAdmin):
+    list_display = ('prompt', 'user', 'value', 'created_at')
+    list_filter = ('value',)
+
+@admin.register(Comment)
+class CommentAdmin(admin.ModelAdmin):
+    list_display = ('author', 'prompt', 'body', 'is_removed', 'created_at')
+    list_filter = ('is_removed',)
+    actions = ['remove_comments']
+
+    def remove_comments(self, request, queryset):
+        queryset.update(is_removed=True)
+    remove_comments.short_description = 'Remove selected comments'
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('recipient', 'type', 'actor', 'is_read', 'created_at')
+    list_filter = ('type', 'is_read')
+```
+
+#### `backend/seed_data.py` — ✅ Exists, adequate for dev
+Covers basics. Add more diverse seed data (10+ prompts across all categories, 3-4 users) before any user testing.
+
+#### `backend/` — 🔴 Missing: `requirements.txt`
+There is no `requirements.txt` or `pyproject.toml` in the backend. Anyone who clones this repo (including yourself on a new machine or any deployment platform) cannot install the dependencies. Create immediately:
+
+```
+# backend/requirements.txt
+django==5.2.8
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.4.0
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+Pillow==10.4.0
+```
+
+#### `backend/` — 🔴 Missing: `.env.example`
+There is no `.env.example` file. When you or anyone else sets up the project, there's no reference for what env vars are needed. Create `backend/.env.example`:
+
+```bash
+DJANGO_SECRET_KEY=generate-a-50-char-random-string-here
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+USE_SQLITE=True
+
+# PostgreSQL (set USE_SQLITE=False to use these)
+DB_NAME=promptatlas
+DB_USER=pa_user
+DB_PASSWORD=
+DB_HOST=localhost
+DB_PORT=5432
+
+# CORS
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:4173
+```
+
+---
+
+### Frontend
+
+#### `src/context/AuthContext.jsx` — ✅ Fully wired to real backend
+Mock blocks removed. Real flow:
+1. On mount: calls `GET /auth/me/` — restores session if refresh cookie exists
+2. `login()`: calls `POST /auth/login/` → stores `data.access` → calls `GET /auth/me/` for user object → connects socket
+3. `register()`: calls `POST /auth/register/` — returns success message
+4. `refreshToken()`: calls `POST /auth/refresh/` — correctly reads `data.access` (SimpleJWT field name)
+5. `logout()`: clears token, disconnects socket, nulls user
+
+One note: `logout()` has a comment `// await api.post('/auth/logout/')` — this is fine for now since SimpleJWT uses stateless tokens. When you add token blacklisting (after adding `token_blacklist` to `INSTALLED_APPS`), uncomment that call and add a `POST /auth/logout/` endpoint that calls `RefreshToken(refresh_token).blacklist()`.
+
+#### `src/hooks/useRating.js` — ✅ Fully wired
+Optimistic update on click. Calls `api.post('/prompts/${promptId}/rate/', { value: pos })`. Rolls back on non-401 error. 401 silently ignored (user not logged in).
+
+#### `src/lib/feedApi.js` — ✅ `MOCK_MODE = false`
+Real API calls. `normalizePrompt()` correctly maps snake_case DB fields to camelCase component props.
+
+#### `src/lib/userApi.js` — ⚠️ One issue remains
+`fetchPrompt()` still has the comment about inconsistency and returns raw data without calling `normalizePrompt`:
+
+```js
+// STILL in userApi.js line 86-89:
+// "Actually, I should use normalizePrompt if I want consistency.
+//  But for now let's just return."
+return data
+```
+
+`PromptDetailPage.jsx` accesses `prompt.cat`, `prompt.avatarUrl`, `prompt.avatarColor`, `prompt.ratingCount`, `prompt.copyCount`, `prompt.preview` — all normalized camelCase fields. These will be `undefined` because the raw response uses `categories`, `author.avatar_url`, `rating_count`, `copy_count`, `body`.
+
+**Fix — 5 lines in `userApi.js`:**
+```js
+import { normalizePrompt } from './feedApi'  // add this import at top
+
+export async function fetchPrompt(slug) {
+  const { data } = await api.get(`/prompts/${slug}/`)
+  return normalizePrompt(data)  // replace bare `return data`
+}
+```
+
+#### `src/components/SharePromptModal.jsx` — 🔴 Still mocked
+The submit handler still uses mock data:
+```js
+// STILL mocked — prompt is never saved to the database:
+// const { data: result } = await api.post('/prompts/', data)
+await new Promise((r) => setTimeout(r, 700))
+onSuccess({ ...data, id: `mock-${Date.now()}` })
+```
+
+The backend endpoint `POST /api/v1/prompts/create/` exists. Wire it:
+```js
+import api from '../lib/api'
+
+async function onSubmit(data) {
+  setIsSubmitting(true)
+  setSubmitError(null)
+  try {
+    const { data: result } = await api.post('/prompts/create/', {
+      title: data.title,
+      body: data.body,
+      description: data.description,
+      prompt_type: data.prompt_type,
+      visibility: data.visibility,
+      target_model: data.target_model,
+    })
+    onSuccess(result)
+  } catch (err) {
+    setSubmitError(err.response?.data?.detail || 'Failed to share prompt.')
+  } finally {
+    setIsSubmitting(false)
+  }
+}
+```
+
+#### `src/pages/ForgotPasswordPage.jsx` — 🔴 Still mocked
+The submit still uses `await new Promise(r => setTimeout(r, 600))`. No backend endpoint for password reset exists yet. This is acceptable for now — but the backend endpoint must be built before launch.
+
+#### `src/pages/SettingsPage.jsx` — ⚠️ Account tab not wired
+Password change form has inputs but no submit handler and no backend endpoint. `uploadAvatar` in `userApi.js` calls `POST /auth/me/avatar/` but that endpoint doesn't exist in `accounts/views.py` or `accounts/urls.py` either.
+
+#### `src/components/CommentSection.jsx` — ✅ Fully wired
+Loads comments via `fetchComments(promptId)`. Posts via `postComment(promptId, text)`. Optimistic prepend on new comment. Auth-gated post form. Clean.
+
+#### `src/components/LeftSidebar.jsx` — ✅ Excellent
+Reads real user from `AuthContext`. Shows `display_name` and `reputation_score`. Protected menu items hidden for guests. "Share a Prompt" opens real modal. "Get Started" for guests links to `/register`.
+
+#### `src/components/Navbar.jsx` — ✅ Excellent
+Auth-aware. Real avatar from user object. User dropdown menu with profile, my prompts, collections, settings, logout. Search form routes correctly. Active state on nav links.
+
+#### `src/pages/SearchResultsPage.jsx` — ✅ Wired
+Debounced search. Reads `?q=` from URL params. Calls `searchPrompts()` → real backend. Tabs for All/Texts/Images with counts. Empty and no-query states handled.
+
+#### `src/pages/TrendingPage.jsx` — ✅ Wired
+Uses `useTrending` hook. Period filter (24h, 7d, 30d). Infinite scroll with IntersectionObserver. Ranked list with `#N` badges. Correct.
+
+#### `src/pages/MyPromptsPage.jsx` — ✅ Wired
+Loads `fetchMyPrompts()` → real API. Lists prompts with visibility badge, stats, Edit/Delete. Delete calls `deletePrompt(id)` → real API. "New Prompt" opens SharePromptModal. Note: Edit button has no handler yet.
+
+#### `src/pages/CollectionsPage.jsx` — ✅ Wired
+Loads `fetchCollections()` → real API. Create collection form wired to `createCollection()`. Clean UI. Opening a collection (`onOpen`) is a no-op — collection detail page doesn't exist yet.
+
+#### `src/pages/StarredPage.jsx` — ✅ Wired
+Loads `fetchBookmarks()` → real API. Unstar calls `removeBookmark()`. Text + image bookmarks separated.
+
+#### `src/pages/NotificationsPage.jsx` — ✅ Wired
+Loads `fetchNotifications()` → real API. Mark-one-read and mark-all-read both wired with optimistic UI.
+
+#### `src/pages/UserProfilePage.jsx` — ✅ Wired
+Loads profile + prompts from real API. Hero with avatar, stats, follow button. Tabs: Prompts / Collections / About.
+
+#### `src/pages/PromptDetailPage.jsx` — ⚠️ Partially wired
+Loads prompt via `fetchPrompt(slug)` — **will render broken until `fetchPrompt` is fixed to call `normalizePrompt`** (see userApi.js issue above). Copy, star/bookmark, and comment section all wired correctly. Fork button is a stub.
+
+#### `src/data/prompts.js` — ⚠️ Still exists but no longer imported by feedApi
+`feedApi.js` has `MOCK_MODE = false` and the import of `TEXT_PROMPTS, IMAGE_PROMPTS` is still at the top of the file but the mock branches are dead code. The file itself can be deleted after confirming the feed works with real data. Not urgent — it doesn't affect runtime since the import is just unused data.
+
+#### `src/pages/ExplorePage.jsx` — ⚠️ Still thin
+`QUICK_CATS` array defined but never rendered. The category filter bar should appear above the feed. Wire it or delete the dead code.
+
+---
+
+## Honest Summary — Where The App Is Right Now
+
+**The app is ~85% of the way to being a real, deployable social platform.**
+
+If you run both servers right now against a PostgreSQL database with seed data, you would have:
+- ✅ Real user registration and login with JWT
+- ✅ Browsable feed of real prompts from the database
+- ✅ Working search
+- ✅ User profiles with follow/unfollow
+- ✅ Trending page
+- ✅ Working notifications page
+- ✅ Working starred/bookmarks page
+- ✅ Working collections page
+- ✅ Rate prompts (persists to DB)
+- ✅ Comment on prompts
+- ✅ Browse and delete your own prompts
+- ✅ Full settings page (profile tab works)
+
+**What is broken or incomplete right now:**
+- 🔴 `PromptDetailPage` renders blank fields (fetchPrompt not normalized)
+- 🔴 `SharePromptModal` doesn't save to DB (still mocked)
+- 🔴 Admin panel shows nothing (models not registered)
+- 🔴 No `requirements.txt` (repo is undeployable)
+- 🔴 `USE_SQLITE` defaults to `True` (production footgun)
+- 🔴 `token_blacklist` not in `INSTALLED_APPS` (rotation silently fails)
+- ⚠️ `CopyEventView` race condition under concurrent traffic
+- ⚠️ `comment_count` not incremented on new comments
+- ⚠️ Password reset, avatar upload — UI exists, backend endpoints don't
+- ⚠️ `ExplorePage` category filter bar — dead code
+- ⚠️ Edit prompt button — no handler
+- ⚠️ Collection detail page — doesn't exist
+- ⚠️ Fork prompt — button exists, does nothing
+
+---
+
+## Priority Fix List — Do These In Order
+
+### Must fix before any testing with real users (blockers)
+
+**Fix 1 — `requirements.txt` (5 min)**
+Create `backend/requirements.txt` with all packages. Without this the backend cannot be installed anywhere.
+
+**Fix 2 — `USE_SQLITE` default (2 min)**
+Change `os.environ.get('USE_SQLITE', 'True')` to `os.environ.get('USE_SQLITE', 'False')`.
+
+**Fix 3 — Add `token_blacklist` to `INSTALLED_APPS` + migrate (5 min)**
+Without this, `BLACKLIST_AFTER_ROTATION = True` silently does nothing and refresh token rotation is broken.
+
+**Fix 4 — `fetchPrompt` normalize (5 min)**
+Add `import { normalizePrompt } from './feedApi'` to `userApi.js` and call it in `fetchPrompt`. This unbreaks the entire prompt detail page.
+
+**Fix 5 — Wire `SharePromptModal` to real API (15 min)**
+Replace the mock block with `api.post('/prompts/create/', data)`. After this, users can actually publish prompts.
+
+**Fix 6 — Register models in admin (20 min)**
+Paste the admin registration code shown above into both `admin.py` files. Without this you have no way to manage content.
+
+### Fix before public launch (important but not blockers)
+
+**Fix 7 — `CopyEventView` F() atomic update (5 min)**
+
+**Fix 8 — `comment_count` increment in `CommentListCreateView` (5 min)**
+
+**Fix 9 — `backend/.env.example` file (5 min)**
+
+**Fix 10 — Password reset backend endpoint**
+Add `POST /auth/forgot-password/` and `POST /auth/reset-password/` to accounts app. Use Django's `PasswordResetForm` or build token-based manually using the `auth_tokens` table from the schema.
+
+**Fix 11 — Avatar upload backend endpoint**
+Add `POST /auth/me/avatar/` to accounts views. Accept multipart, validate file type/size, save to `MEDIA_ROOT` (local dev) or S3 (production).
+
+**Fix 12 — `ExplorePage` category bar**
+Either render `QUICK_CATS` as a scrollable pill bar above the Feed, or delete the dead code.
+
+---
+
+## Next Major Milestone: Deploy
+
+Once fixes 1–6 above are done, the app is ready for a real deployment. Here is the exact sequence:
+
+### Step 1 — Local full-stack test
+```bash
+# Terminal 1 — backend
+cd backend
+pip install -r requirements.txt
+python manage.py migrate
+python seed_data.py
+python manage.py createsuperuser
+python manage.py runserver
+
+# Terminal 2 — frontend
+npm install
+npm run dev
+```
+Visit `http://localhost:5173`. Register a real account. Create a prompt. Rate it. Confirm it persists on refresh.
+
+### Step 2 — Deploy backend to Railway
+1. Push to GitHub (backend/ folder in the repo)
+2. Create new Railway project → Deploy from GitHub repo
+3. Add PostgreSQL plugin (Railway provisions it automatically)
+4. Set env vars in Railway dashboard: `DJANGO_SECRET_KEY`, `USE_SQLITE=False`, `DEBUG=False`, `ALLOWED_HOSTS=your-railway-domain.up.railway.app`, `CORS_ALLOWED_ORIGINS=https://your-vercel-domain.vercel.app`
+5. Add start command: `cd backend && python manage.py migrate && gunicorn config.wsgi:application`
+6. Add `gunicorn` to `requirements.txt`
+
+### Step 3 — Deploy frontend to Vercel
+1. Import repo on vercel.com
+2. Set root directory to `/` (not `/frontend` — your vite.config.js is at root)
+3. Add env var: `VITE_API_BASE_URL=https://your-railway-domain.up.railway.app/api/v1`
+4. Deploy
+
+### Step 4 — Verify end to end
+- Register on the live URL
+- Create a prompt
+- Rate it, comment on it
+- Confirm DB shows the data in Railway's PostgreSQL viewer
+
+**Do not add real users or share the URL publicly until Fix 6 (admin panel) and Fix 10 (password reset) are done.**
+
+---
+
+## What Comes After Deployment
+
+Once the app is live and stable, in this order:
+
+1. **Content moderation** — Add `Report` model + endpoint. Register in admin. Integrate OpenAI Moderation API on prompt submit (`POST /prompts/create/` → run body through moderation before saving).
+
+2. **Real trending algorithm** — Replace `order_by('-average_rating')` in `TrendingFeedView` with a score based on recent `copy_count + rating_count + comment_count` within a time window.
+
+3. **WebSockets / real-time** — Add `django-channels` + Redis. Push `notification.new` events. Wire `connectSocket()` in AuthContext on login (the frontend socket code is already written and waiting).
+
+4. **Media storage (S3 / Cloudflare R2)** — Replace local `MEDIA_ROOT` with cloud object storage for avatars and prompt cover images.
+
+5. **Email** — Configure Django's email backend (AWS SES or SendGrid) for registration verification and password reset.
+
+6. **Performance** — Add `select_related('author')` and `prefetch_related('categories', 'tags')` to feed queryset to eliminate N+1 queries. Add pagination to all list views that don't have it.
+
+7. **Full-text search** — Replace `icontains` in `SearchView` with PostgreSQL `SearchVector` / `SearchRank` for proper relevance ranking.
+
+8. **Mobile app** — React Native using the same backend API. No backend changes needed.
