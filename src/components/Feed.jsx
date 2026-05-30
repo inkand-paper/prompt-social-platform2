@@ -1,25 +1,15 @@
 // components/Feed.jsx
-// Tabs: All | Texts | Images | Videos (scope only)
-//
-// All tab — same layout as before (text rows + masonry grid),
-// split into For You / Popular / New sections.
-// Each section shows limited prompts + gradient Show More button.
-// Show More switches to Texts or Images tab.
-//
-// Texts / Images: full list, sortable by rating
-// Videos: placeholder
+// Real data via useFeed() hook with infinite scroll.
+// Tabs: All | Texts | Images | Videos
+// Falls back to mock data while backend is offline (MOCK_MODE=true in feedApi.js).
 
-import { useState } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { useFeed } from '../hooks/useFeed'
 import TextCard from './TextCard'
 import ImageCard from './ImageCard'
-import { TEXT_PROMPTS, IMAGE_PROMPTS } from '../data/prompts'
+import SkeletonCard from './SkeletonCard'
 
 const TABS = ['All', 'Texts', 'Images', 'Videos']
-
-// Sort highest rating first
-function sortByRating(arr) {
-  return [...arr].sort((a, b) => b.rating - a.rating)
-}
 
 // ── Sort button ──────────────────────────────────────────────
 function SortButton({ sorted, onToggle }) {
@@ -37,11 +27,10 @@ function SortButton({ sorted, onToggle }) {
   )
 }
 
-// ── Show More button with gradient fade ──────────────────────
-function ShowMore({ label, onClick }) {
+// ── Show More button ─────────────────────────────────────────
+function ShowMoreBtn({ label, onClick }) {
   return (
     <div className="show-more-wrap">
-      <div className="show-more-gradient" />
       <button className="show-more-btn" onClick={onClick}>
         {label}
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -52,90 +41,7 @@ function ShowMore({ label, onClick }) {
   )
 }
 
-// ── Config for each All tab section ─────────────────────────
-// textLimit / imageLimit = how many to show before "Show More"
-const ALL_SECTIONS = [
-  { label: 'For You',  textLimit: 4, imageLimit: 3 },
-  { label: 'Popular',  textLimit: 3, imageLimit: 4 },
-  { label: 'New',      textLimit: 2, imageLimit: 5 },
-]
-
-// One section: section heading + text rows + image grid + show more buttons
-function AllSection({ label, textLimit, imageLimit, onShowMore }) {
-  const visibleText  = TEXT_PROMPTS.slice(0, textLimit)
-  const visibleImage = IMAGE_PROMPTS.slice(0, imageLimit)
-  const hasMoreText  = TEXT_PROMPTS.length > textLimit
-  const hasMoreImage = IMAGE_PROMPTS.length > imageLimit
-
-  return (
-    <div className="feed-section">
-      <div className="feed-section-heading">{label}</div>
-
-      {/* Text prompt rows */}
-      <div className="all-block">
-        <div className="text-list">
-          {visibleText.map((p) => <TextCard key={p.id} prompt={p} />)}
-        </div>
-        {hasMoreText && (
-          <ShowMore label="Show More" onClick={() => onShowMore('Texts')} />
-        )}
-      </div>
-
-      {/* Image masonry grid */}
-      <div className="all-block" style={{ marginTop: 'var(--sp-6)' }}>
-        <div className="masonry">
-          {visibleImage.map((p) => <ImageCard key={p.id} prompt={p} />)}
-        </div>
-        {hasMoreImage && (
-          <ShowMore label="Show More" onClick={() => onShowMore('Images')} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── All tab ──────────────────────────────────────────────────
-function AllTab({ onShowMore }) {
-  return (
-    <>
-      {ALL_SECTIONS.map((s) => (
-        <AllSection
-          key={s.label}
-          label={s.label}
-          textLimit={s.textLimit}
-          imageLimit={s.imageLimit}
-          onShowMore={onShowMore}
-        />
-      ))}
-    </>
-  )
-}
-
-// ── Texts tab ────────────────────────────────────────────────
-function TextsTab({ sorted }) {
-  const prompts = sorted ? sortByRating(TEXT_PROMPTS) : TEXT_PROMPTS
-  return (
-    <div className="feed-section">
-      <div className="text-list">
-        {prompts.map((p) => <TextCard key={p.id} prompt={p} />)}
-      </div>
-    </div>
-  )
-}
-
-// ── Images tab ───────────────────────────────────────────────
-function ImagesTab({ sorted }) {
-  const prompts = sorted ? sortByRating(IMAGE_PROMPTS) : IMAGE_PROMPTS
-  return (
-    <div className="feed-section">
-      <div className="masonry">
-        {prompts.map((p) => <ImageCard key={p.id} prompt={p} />)}
-      </div>
-    </div>
-  )
-}
-
-// ── Videos tab — placeholder (TODO: wire to Django) ──────────
+// ── Videos placeholder ───────────────────────────────────────
 function VideosTab() {
   return (
     <div className="feed-section">
@@ -155,6 +61,43 @@ function VideosTab() {
 export default function Feed() {
   const [activeTab, setActiveTab] = useState('All')
   const [sortedByRating, setSorted] = useState(false)
+
+  // Which type to pass to the API
+  const typeParam =
+    activeTab === 'Texts'  ? 'text' :
+    activeTab === 'Images' ? 'image' : 'all'
+  const sortParam = sortedByRating ? 'rating' : 'new'
+
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError } = useFeed({
+    type: activeTab === 'Videos' ? 'all' : typeParam,
+    sort: sortParam,
+  })
+
+  const allItems = data?.pages.flatMap((page) => page.results) ?? []
+  const textItems  = allItems.filter((p) => !p.img)
+  const imageItems = allItems.filter((p) => !!p.img)
+
+  // Decide which items to show in each tab
+  const displayText  = activeTab === 'All' ? textItems.slice(0, 5)  : textItems
+  const displayImage = activeTab === 'All' ? imageItems.slice(0, 4) : imageItems
+
+  // Infinite scroll sentinel
+  const sentinelRef = useRef(null)
+  const onIntersect = useCallback(
+    (entries) => {
+      if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+        fetchNextPage()
+      }
+    },
+    [hasNextPage, isFetchingNextPage, fetchNextPage],
+  )
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const obs = new IntersectionObserver(onIntersect, { rootMargin: '300px' })
+    obs.observe(el)
+    return () => obs.unobserve(el)
+  }, [onIntersect])
 
   function handleShowMore(tab) {
     setActiveTab(tab)
@@ -178,17 +121,118 @@ export default function Feed() {
             </div>
           ))}
         </div>
-
         {showSort && (
           <SortButton sorted={sortedByRating} onToggle={() => setSorted(!sortedByRating)} />
         )}
       </div>
 
-      {activeTab === 'All'    && <AllTab onShowMore={handleShowMore} />}
-      {activeTab === 'Texts'  && <TextsTab sorted={sortedByRating} />}
-      {activeTab === 'Images' && <ImagesTab sorted={sortedByRating} />}
       {activeTab === 'Videos' && <VideosTab />}
 
+      {activeTab !== 'Videos' && (
+        <>
+          {/* Loading state */}
+          {isLoading && (
+            <div className="feed-section">
+              {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
+              {activeTab !== 'Texts' && (
+                <div className="masonry" style={{ marginTop: 24 }}>
+                  {[1, 2, 3].map((i) => <SkeletonCard key={`img-${i}`} type="image" />)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error state */}
+          {isError && !isLoading && (
+            <div className="feed-section">
+              <div className="page-placeholder">
+                <div className="page-placeholder-text">Failed to load feed</div>
+                <div className="page-placeholder-sub">Check your connection and try again.</div>
+              </div>
+            </div>
+          )}
+
+          {/* Content */}
+          {!isLoading && !isError && (
+            <>
+              {/* All tab — sections */}
+              {activeTab === 'All' && (
+                <div className="feed-section">
+                  <div className="feed-section-heading">Latest</div>
+                  {displayText.length > 0 && (
+                    <div className="all-block">
+                      <div className="text-list">
+                        {displayText.map((p) => <TextCard key={p.id} prompt={p} />)}
+                      </div>
+                      {textItems.length > 5 && (
+                        <ShowMoreBtn label="More text prompts" onClick={() => handleShowMore('Texts')} />
+                      )}
+                    </div>
+                  )}
+                  {displayImage.length > 0 && (
+                    <div className="all-block" style={{ marginTop: 'var(--sp-6)' }}>
+                      <div className="masonry">
+                        {displayImage.map((p) => <ImageCard key={p.id} prompt={p} />)}
+                      </div>
+                      {imageItems.length > 4 && (
+                        <ShowMoreBtn label="More image prompts" onClick={() => handleShowMore('Images')} />
+                      )}
+                    </div>
+                  )}
+                  {allItems.length === 0 && (
+                    <div className="page-placeholder">
+                      <div className="page-placeholder-text">Nothing here yet</div>
+                      <div className="page-placeholder-sub">Be the first to share a prompt!</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Texts tab */}
+              {activeTab === 'Texts' && (
+                <div className="feed-section">
+                  <div className="text-list">
+                    {textItems.length === 0 ? (
+                      <div className="page-placeholder">
+                        <div className="page-placeholder-text">No text prompts yet</div>
+                      </div>
+                    ) : (
+                      textItems.map((p) => <TextCard key={p.id} prompt={p} />)
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Images tab */}
+              {activeTab === 'Images' && (
+                <div className="feed-section">
+                  {imageItems.length === 0 ? (
+                    <div className="page-placeholder">
+                      <div className="page-placeholder-text">No image prompts yet</div>
+                    </div>
+                  ) : (
+                    <div className="masonry">
+                      {imageItems.map((p) => <ImageCard key={p.id} prompt={p} />)}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Infinite scroll sentinel */}
+              {activeTab !== 'All' && (
+                <>
+                  <div ref={sentinelRef} style={{ height: 1 }} />
+                  {isFetchingNextPage && (
+                    <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', fontSize: 'var(--fs-sm)' }}>
+                      Loading more…
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }

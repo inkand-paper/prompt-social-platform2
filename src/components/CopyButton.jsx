@@ -12,14 +12,19 @@ function CopyIcon() {
   )
 }
 
-// Props: text (string to copy), className (optional)
-export default function CopyButton({ text, className = '' }) {
+// Props: text (string to copy), className (optional), onCopy (optional callback after success)
+export default function CopyButton({ text, className = '', onCopy }) {
   const [copied, setCopied] = useState(false)
 
   function handleClick() {
-    navigator.clipboard.writeText(text).finally(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      // Only show "Copied!" if the write actually succeeded.
+      // .finally() was the bug — it fired even on permission denied.
       setCopied(true)
       setTimeout(() => setCopied(false), 1800)
+      onCopy?.()  // fire the optional callback (e.g. logCopyEvent)
+    }).catch(() => {
+      // Silently ignore — clipboard permission was denied
     })
   }
 

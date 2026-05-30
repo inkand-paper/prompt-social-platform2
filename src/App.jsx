@@ -1,23 +1,22 @@
 // App.jsx
-// Root component — puts all pieces together.
+// Layout shell for all routes that use the Navbar + sidebar grid.
+// Auth-only or public-content routes that DON'T need this shell
+// (Login, Register, ForgotPassword) are mounted directly in main.jsx.
 
-import { useState } from 'react'
-import Navbar from './components/Navbar'
+import { Outlet } from 'react-router-dom'
+import Navbar      from './components/Navbar'
 import LeftSidebar from './components/LeftSidebar'
-import Feed from './components/Feed'
 import RightSidebar from './components/RightSidebar'
 
 export default function App() {
-  const [navTab, setNavTab]   = useState('Home')
-  const [menuItem, setMenuItem] = useState('Home')
-
   return (
     <>
-      <Navbar activeTab={navTab} onTabChange={setNavTab} />
+      <Navbar />
 
       <div className="page">
-        <LeftSidebar activeMenu={menuItem} onMenuChange={setMenuItem} />
-        <Feed />
+        <LeftSidebar />
+        {/* The matched child route renders here */}
+        <Outlet />
         <RightSidebar />
       </div>
     </>
