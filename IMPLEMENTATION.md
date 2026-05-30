@@ -1432,3 +1432,325 @@ This is the only remaining bug in the frontend. Everything else is either intent
 | Production infra (AWS) | 🔴 Not yet | Do after real users |
 
 **Start here → create `backend/` → `django-admin startproject config backend/` → get that health endpoint running.**
+
+
+---
+
+---
+
+# UPDATE — May 30, 2026
+
+> **Full repo re-cloned and every file read line by line.**  
+> This supersedes the May 30, 2025 update where relevant. Previous content is preserved above.
+
+---
+
+## Complete Audit — Where Things Stand Right Now
+
+Massive progress since last update. A real Django backend now exists. Here is the exact, honest state of every file.
+
+---
+
+### Backend — What's Built
+
+| File | Status | Notes |
+|---|---|---|
+| `backend/config/settings.py` | ⚠️ Issues | SQLite in use, not PostgreSQL. `SECRET_KEY` hardcoded in plain text. `CORS_ALLOW_ALL_ORIGINS = True`. JWT using HS256, not RS256. All four of these must be fixed before any hosting. |
+| `backend/config/urls.py` | ✅ Good | Health check + auth + prompts routes all wired. |
+| `backend/config/views.py` | ✅ Good | Health check endpoint works and returns correct shape. |
+| `backend/accounts/models.py` | ✅ Excellent | Full `User` model with UUID PK, all fields from schema. `OAuthProvider`, `Follow` models present. |
+| `backend/accounts/serializers.py` | ✅ Good | `UserSerializer` and `RegisterSerializer` correct. |
+| `backend/accounts/views.py` | ⚠️ One bug | `FollowUserView.post()` handles both follow and unfollow in the same POST — it toggles. The `unfollowUser()` in `userApi.js` calls `api.delete(...)` but **there is no DELETE handler** on `FollowUserView`. The delete call will return 405. |
+| `backend/accounts/urls.py` | ⚠️ Typo | `user_prmpts` — missing 'o'. Not a runtime bug but unprofessional. Fix it. |
+| `backend/prompts/models.py` | ✅ Excellent | Every model from §3 is implemented: `Prompt`, `Category`, `Tag`, `Rating`, `Comment`, `Collection`, `CollectionItem`, `Bookmark`, `Notification`, `PromptCopy`, `PromptView`. All relations correct. |
+| `backend/prompts/serializers.py` | ✅ Good | All serializers present. `PromptSerializer` nests author + categories + tags correctly. |
+| `backend/prompts/views.py` | ⚠️ Issues | See detailed bugs below. |
+| `backend/prompts/urls.py` | ⚠️ Route conflict | `<slug:slug>/` and `<uuid:pk>/copy/` both exist. Django resolves top-down — a UUID like `3f2a...` will attempt to match `<slug:slug>` first and fail with 404 before reaching the UUID routes. The UUID routes must come before the slug route. |
+| `backend/db.sqlite3` | 🔴 Must fix | SQLite file is committed to the repo. It must be in `.gitignore`. SQLite cannot be used in production — it doesn't support concurrent writes. Switch to PostgreSQL. |
+| `backend/seed_data.py` | ✅ Good | Exists, creates categories, tags, prompts. Run this after switching to PostgreSQL. |
+| `backend/accounts/migrations/0001_initial.py` | ✅ Good | Migration was generated on 2026-05-30. Correct. |
+
+---
+
+### Detailed Backend Bugs
+
+#### Bug 1 — SQLite instead of PostgreSQL (settings.py line 84)
+```python
+# CURRENT — wrong:
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+# FIX:
+import os
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME', 'promptatlas'),
+        'USER': os.environ.get('DB_USER', 'pa_user'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
+    }
+}
+```
+
+#### Bug 2 — SECRET_KEY hardcoded (settings.py line 13)
+```python
+# CURRENT — wrong:
+SECRET_KEY = 'django-insecure-ryc)au$&ioc#^a2)...'
+
+# FIX:
+import os
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ValueError("DJANGO_SECRET_KEY environment variable is not set")
+```
+
+#### Bug 3 — CORS wide open (settings.py line 60)
+```python
+# CURRENT — wrong for anything beyond localhost:
+CORS_ALLOW_ALL_ORIGINS = True
+
+# FIX:
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',     # Vite dev server
+    'http://localhost:4173',     # Vite preview
+    # 'https://promptatlas.com', # add your real domain here
+]
+CORS_ALLOW_CREDENTIALS = True  # needed for the HttpOnly refresh cookie
+```
+
+#### Bug 4 — URL route conflict in prompts/urls.py
+```python
+# CURRENT — wrong order (slug catches UUIDs too):
+path('<slug:slug>/', PromptDetailView.as_view(), ...),
+path('<uuid:pk>/copy/', CopyEventView.as_view(), ...),   # never reached
+
+# FIX — UUID routes must come first:
+path('<uuid:pk>/copy/', CopyEventView.as_view(), ...),
+path('<uuid:pk>/rate/', RatingCreateUpdateView.as_view(), ...),
+path('<uuid:pk>/comments/', CommentListCreateView.as_view(), ...),
+path('<slug:slug>/', PromptDetailView.as_view(), ...),   # last
+```
+
+#### Bug 5 — Follow/Unfollow: DELETE method missing (accounts/views.py)
+The frontend calls `api.delete('/auth/profiles/{username}/follow/')` but `FollowUserView` only has a `post()` method. The POST already toggles, but the frontend sends a DELETE. Mismatch.
+
+**Two options — pick one:**
+
+Option A (keep toggle POST, fix frontend): Remove `unfollowUser()` from `userApi.js`. Make `followUser()` call POST always. The backend toggles. Return `{following: bool}` and the frontend reads it.
+
+Option B (proper REST, add DELETE handler):
+```python
+class FollowUserView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, username):
+        # Follow only
+        try:
+            target = User.objects.get(username=username)
+            if target == request.user:
+                return Response({"error": "Cannot follow yourself"}, status=400)
+            _, created = Follow.objects.get_or_create(follower=request.user, following=target)
+            if created:
+                target.follower_count += 1
+                request.user.following_count += 1
+                target.save(); request.user.save()
+            return Response({"following": True})
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
+
+    def delete(self, request, username):
+        # Unfollow only
+        try:
+            target = User.objects.get(username=username)
+            deleted, _ = Follow.objects.filter(follower=request.user, following=target).delete()
+            if deleted:
+                target.follower_count = max(0, target.follower_count - 1)
+                request.user.following_count = max(0, request.user.following_count - 1)
+                target.save(); request.user.save()
+            return Response({"following": False})
+        except User.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
+```
+
+**Recommendation: Option B.** It's proper REST and the frontend is already wired for it.
+
+#### Bug 6 — Rating view doesn't validate value range (prompts/views.py)
+```python
+# CURRENT — no validation:
+defaults={'value': request.data.get('value')}
+
+# FIX:
+value = request.data.get('value')
+try:
+    value = float(value)
+    if not (0.5 <= value <= 5.0):
+        raise ValueError
+except (TypeError, ValueError):
+    return Response({"error": "Rating must be between 0.5 and 5.0"}, status=400)
+```
+
+#### Bug 7 — `db.sqlite3` committed to git
+Add to `.gitignore`:
+```
+backend/db.sqlite3
+backend/__pycache__/
+backend/**/__pycache__/
+backend/**/*.pyc
+*.pyc
+```
+
+#### Bug 8 — `TrendingFeedView` is not actually trending
+It just orders by average_rating. This is "top rated", not "trending". Trending should be based on recent activity (ratings + copies + views in the last 7 days). Fix this after the basics work — low priority for now, but label it correctly.
+
+---
+
+### Frontend — What's Changed Since Last Audit
+
+| File | Status | Notes |
+|---|---|---|
+| `src/components/CopyButton.jsx` | ✅ Fixed | `.finally` bug corrected to `.then/.catch`. `onCopy` callback added. |
+| `src/lib/userApi.js` | ✅ New | Full API lib: fetchUserProfile, follow, unfollow, notifications, bookmarks, search, comments, collections. `MOCK_MODE = false` — this is already pointing at the real backend. |
+| `src/components/FollowButton.jsx` | ✅ New | Optimistic follow/unfollow with rollback on error. Auth-gated. |
+| `src/components/ProtectedRoute.jsx` | ✅ New | Loading state prevents flash redirect. Stores `from` location for post-login redirect. |
+| `src/pages/UserProfilePage.jsx` | ✅ New | Full profile hero, stats, tabs, prompts list. Loads real data from backend. |
+| `src/pages/PromptDetailPage.jsx` | ✅ New | Full prompt detail: body, rating, copy, star, fork button (stub), comments. |
+| `src/pages/NotificationsPage.jsx` | ✅ New | Fully wired: load, mark-one-read, mark-all-read. Optimistic UI. |
+| `src/pages/SettingsPage.jsx` | ✅ New | Profile, Account, Notifications tabs. Avatar upload wired. Password change UI built (backend endpoint missing). |
+| `src/pages/ExplorePage.jsx` | ⚠️ Thin | Just renders `<Feed />`. The category quick-filter bar (`QUICK_CATS`) is defined but never rendered. |
+| `src/context/AuthContext.jsx` | ⚠️ Still mocked | `login()` and `register()` still use mock block. **Must be swapped to real API calls now that the backend auth endpoints exist.** |
+| `src/lib/feedApi.js` | ⚠️ MOCK_MODE = true | Feed still reads from `src/data/prompts.js`. Must flip to `false` after fixing settings bugs 1–4. |
+| `src/data/prompts.js` | ⚠️ Still exists | Still needed while MOCK_MODE is true. Delete after flip. |
+| `src/hooks/useRating.js` | 🔴 Still broken | The `fetch` call is still a comment. The backend rating endpoint now exists. This must be wired. |
+
+---
+
+### Frontend Bugs Found
+
+#### Bug 1 — `useRating.js` still has dead TODO (most critical)
+```js
+// CURRENT — rating never persists:
+function handleClick(pos) {
+    setRating(pos)
+    setHoverRating(null)
+    // TODO Django: fetch('/api/prompts/${id}/rate/', { method: 'POST', ...})
+}
+
+// FIX — wire to the real endpoint:
+import api from '../lib/api'
+
+function handleClick(pos) {
+    setRating(pos)
+    setHoverRating(null)
+    if (promptId) {
+        api.post(`/prompts/${promptId}/rate/`, { value: pos }).catch(() => {
+            // rollback on failure
+            setRating(initialRating)
+        })
+    }
+}
+```
+
+#### Bug 2 — `userApi.js` has an inconsistency in `fetchPrompt`
+```js
+// This comment in userApi.js is a bug:
+// "Actually, I should use normalizePrompt if I want consistency. But for now let's just return."
+```
+`PromptDetailPage.jsx` accesses `prompt.cat`, `prompt.avatarUrl`, `prompt.ratingCount` etc. — all camelCase normalized fields. But `fetchPrompt` returns raw snake_case from Django. `prompt.cat` will be `undefined`. The detail page will render broken. Fix: import `normalizePrompt` from `feedApi.js` and call it in `fetchPrompt`.
+
+#### Bug 3 — `ExplorePage.jsx` has dead code
+`QUICK_CATS` array is defined but never rendered. Either add the category filter bar UI or remove the array.
+
+#### Bug 4 — `AuthContext.jsx` mock must be swapped NOW
+The backend auth endpoints exist: `POST /api/v1/auth/register/`, `POST /api/v1/auth/login/`. The mock blocks in `login()` and `register()` must be replaced. However, note that `TokenObtainPairView` (Django SimpleJWT) returns `{ access, refresh }` not `{ access_token, user }`. The `AuthContext` code expects `data.access_token` and `data.user`. Either:
+- Customize SimpleJWT's response to include the user object, or
+- After getting the token, make a second call to `/auth/me/` to get the user
+
+The cleanest fix is a custom `TokenObtainPairSerializer` that adds the user to the response.
+
+#### Bug 5 — `SettingsPage.jsx` Account tab password change has no submit handler
+The password change form has inputs but the "Update Password" button has no `onClick` and the form has no `onSubmit`. It does nothing. There is also no backend endpoint for password change. Both need to be built.
+
+---
+
+## Revised Status Table — Today
+
+| Milestone | Original Plan | Status |
+|---|---|---|
+| M0 — Foundation | Project setup, deps, routing | ✅ Complete |
+| M1 — Auth | Register, login, JWT, protected routes | ⚠️ Backend exists, frontend still mocked |
+| M2 — Prompts CRUD | Create, read, feed, copy | ⚠️ Backend exists with bugs (URL order, SQLite, CORS) |
+| M3 — Social Graph | Follows | ⚠️ Backend exists, DELETE bug |
+| M4 — Comments & Collections | Comments, bookmarks, collections | ⚠️ Backend exists, not wired in all pages |
+| M5 — Real-Time | WebSockets, notifications | ⚠️ Notification model + API exist, no WebSocket yet |
+| M6 — Search | Full-text search | ✅ Backend endpoint exists (icontains, not FTS yet) |
+| M7 — Moderation | Reports, content scanning | 🔴 Not started |
+| M8 — Hosting | Deploy | 🔴 Not started |
+
+---
+
+## What To Do Right Now — Ordered by Priority
+
+### Priority 1 — Fix the four settings bugs (do this today, takes 30 minutes)
+
+1. Install PostgreSQL locally. Create database `promptatlas`.
+2. Fix `settings.py`: env-var-based `SECRET_KEY`, PostgreSQL `DATABASES`, restrict `CORS_ALLOWED_ORIGINS`, add `db.sqlite3` to `.gitignore`.
+3. `pip install psycopg2-binary python-dotenv`
+4. Create `.env` in `backend/`:
+   ```
+   DJANGO_SECRET_KEY=generate-a-new-random-key-here
+   DB_NAME=promptatlas
+   DB_USER=pa_user
+   DB_PASSWORD=your_password
+   DB_HOST=localhost
+   DB_PORT=5432
+   ```
+5. `python manage.py migrate` against PostgreSQL.
+6. `python seed_data.py` to seed initial data.
+7. `python manage.py runserver` — confirm health check responds.
+
+### Priority 2 — Fix the URL route order in prompts/urls.py (10 minutes)
+
+Move the UUID routes (`copy`, `rate`, `comments`) above the slug route. One reorder, no logic changes.
+
+### Priority 3 — Fix the FollowUserView DELETE handler (20 minutes)
+
+Add the `delete()` method to `FollowUserView` as shown in Bug 5 above.
+
+### Priority 4 — Swap AuthContext mock for real API calls (30 minutes)
+
+Write a custom `TokenObtainPairSerializer` in `accounts/serializers.py` that adds the user to the JWT response. Then uncomment the real calls in `AuthContext.jsx`.
+
+### Priority 5 — Fix useRating.js (15 minutes)
+
+Wire the `handleClick` to `api.post('/prompts/{id}/rate/', { value: pos })`. This makes ratings actually persist — currently the most visible broken feature.
+
+### Priority 6 — Fix fetchPrompt to use normalizePrompt (15 minutes)
+
+Import `normalizePrompt` from `feedApi.js` in `userApi.js`, call it on the response in `fetchPrompt()`. The detail page will then display correctly.
+
+### Priority 7 — Flip MOCK_MODE to false, delete prompts.js
+
+Only after Priority 1 is done (PostgreSQL running with seeded data). Set `MOCK_MODE = false` in `feedApi.js`. Delete `src/data/prompts.js`. The feed will now load from the real database.
+
+---
+
+## What Can Wait
+
+- **WebSockets / real-time notifications** — Notification model + API exists. Django Channels can be added as Milestone B5, after the basics are working end-to-end.
+- **Content moderation** — Do before opening to the public, not before internal testing.
+- **AWS / production infra** — Railway + Render + Cloudflare R2 is the right first hosting. AWS later.
+- **Password change endpoint** — UI exists, build the backend endpoint as part of the settings work.
+- **Full-text search** — Current `icontains` search works fine for early stage. PostgreSQL `to_tsvector` / `SearchVector` can replace it when you have enough data that relevance ranking matters.
+- **TrendingFeedView accuracy** — It shows top-rated, not truly trending. Fine for now. Annotate it properly after you have real user activity data.
+
+---
+
+## One Sentence Summary
+
+The architecture is solid and nearly complete — you need to fix 4 settings bugs, reorder 3 URL patterns, add 1 DELETE method, swap 2 mock blocks for real API calls, and wire 1 rating hook, and the app will be fully functional end-to-end on a real PostgreSQL database.
