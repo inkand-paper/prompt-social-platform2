@@ -4,6 +4,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from django.core.validators import MinValueValidator, MaxValueValidator
 
+
 class Category(models.Model):
     slug = models.SlugField(max_length=60, unique=True)
     name = models.CharField(max_length=80)
@@ -17,6 +18,7 @@ class Category(models.Model):
     def __str__(self):
         return self.name
 
+
 class Tag(models.Model):
     slug = models.SlugField(max_length=60, unique=True)
     name = models.CharField(max_length=60)
@@ -25,6 +27,7 @@ class Tag(models.Model):
 
     def __str__(self):
         return self.name
+
 
 class Prompt(models.Model):
     TYPE_CHOICES = [
@@ -41,40 +44,44 @@ class Prompt(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='prompts')
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='prompts'
+    )
     slug = models.SlugField(max_length=120, unique=True)
     title = models.CharField(max_length=200)
     body = models.TextField()
     description = models.TextField(blank=True, null=True)
     prompt_type = models.CharField(max_length=10, choices=TYPE_CHOICES, default='text')
     visibility = models.CharField(max_length=10, choices=VISIBILITY_CHOICES, default='public')
-    
+
     cover_image_url = models.URLField(blank=True, null=True)
     cover_image_key = models.CharField(max_length=255, blank=True, null=True)
     target_model = models.CharField(max_length=60, blank=True, null=True)
-    
+
     variables = models.JSONField(default=list, blank=True)
-    
-    forked_from = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='forks')
+
+    forked_from = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='forks'
+    )
     fork_count = models.IntegerField(default=0)
-    
+
     view_count = models.IntegerField(default=0)
     copy_count = models.IntegerField(default=0)
     save_count = models.IntegerField(default=0)
     comment_count = models.IntegerField(default=0)
     rating_count = models.IntegerField(default=0)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
-    
+
     categories = models.ManyToManyField(Category, related_name='prompts', blank=True)
     tags = models.ManyToManyField(Tag, related_name='prompts', blank=True)
-    
+
     is_flagged = models.BooleanField(default=False)
     is_removed = models.BooleanField(default=False)
     removal_reason = models.TextField(blank=True, null=True)
-    
+
     is_featured = models.BooleanField(default=False)
     featured_at = models.DateTimeField(null=True, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     published_at = models.DateTimeField(auto_now_add=True)
@@ -87,11 +94,24 @@ class Prompt(models.Model):
     def __str__(self):
         return self.title
 
+    class Meta:
+        # Block D #1: composite indexes for high-traffic feed queries
+        indexes = [
+            models.Index(fields=['visibility', 'is_removed', '-published_at'], name='prompt_feed_idx'),
+            models.Index(fields=['author', '-published_at'], name='prompt_author_idx'),
+            models.Index(fields=['-average_rating', '-published_at'], name='prompt_rating_idx'),
+            models.Index(fields=['-copy_count', '-published_at'], name='prompt_copy_idx'),
+        ]
+
+
 class Rating(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name='ratings')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    value = models.DecimalField(max_digits=2, decimal_places=1, validators=[MinValueValidator(0.5), MaxValueValidator(5.0)])
+    value = models.DecimalField(
+        max_digits=2, decimal_places=1,
+        validators=[MinValueValidator(0.5), MaxValueValidator(5.0)]
+    )
     review_text = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -99,11 +119,14 @@ class Rating(models.Model):
     class Meta:
         unique_together = ('prompt', 'user')
 
+
 class Comment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name='comments')
     author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
+    parent = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies'
+    )
     body = models.TextField()
     is_edited = models.BooleanField(default=False)
     is_removed = models.BooleanField(default=False)
@@ -115,17 +138,23 @@ class Comment(models.Model):
     def __str__(self):
         return f"Comment by {self.author} on {self.prompt}"
 
+
 class Collection(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='collections')
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='collections'
+    )
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True, null=True)
-    visibility = models.CharField(max_length=10, choices=Prompt.VISIBILITY_CHOICES, default='public')
+    visibility = models.CharField(
+        max_length=10, choices=Prompt.VISIBILITY_CHOICES, default='public'
+    )
     cover_image_url = models.URLField(blank=True, null=True)
     prompts = models.ManyToManyField(Prompt, through='CollectionItem', related_name='collections')
     prompt_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
 
 class CollectionItem(models.Model):
     collection = models.ForeignKey(Collection, on_delete=models.CASCADE)
@@ -137,14 +166,19 @@ class CollectionItem(models.Model):
 
     class Meta:
         unique_together = ('collection', 'prompt')
+        ordering = ['sort_order', 'added_at']
+
 
 class Bookmark(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='bookmarks')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='bookmarks'
+    )
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ('user', 'prompt')
+
 
 class Notification(models.Model):
     TYPE_CHOICES = [
@@ -159,8 +193,12 @@ class Notification(models.Model):
         ('system_message', 'System Message'),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications')
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications'
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
     type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, null=True, blank=True)
     comment = models.ForeignKey(Comment, on_delete=models.CASCADE, null=True, blank=True)
@@ -169,19 +207,29 @@ class Notification(models.Model):
     read_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+
 class PromptCopy(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name='copies')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
     ip_hash = models.CharField(max_length=64, blank=True, null=True)
     user_agent = models.TextField(blank=True, null=True)
     copied_at = models.DateTimeField(auto_now_add=True)
 
+
 class PromptView(models.Model):
     prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, related_name='views')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
     ip_hash = models.CharField(max_length=64, blank=True, null=True)
     viewed_date = models.DateField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('prompt', 'user', 'viewed_date')
+
 
 class Report(models.Model):
     REASON_CHOICES = [
@@ -199,13 +247,22 @@ class Report(models.Model):
         ('dismissed', 'Dismissed'),
     ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='reports_filed')
-    prompt = models.ForeignKey(Prompt, on_delete=models.CASCADE, null=True, blank=True, related_name='reports')
-    comment = models.ForeignKey(Comment, on_delete=models.CASCADE, null=True, blank=True, related_name='reports')
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='reports_filed'
+    )
+    prompt = models.ForeignKey(
+        Prompt, on_delete=models.CASCADE, null=True, blank=True, related_name='reports'
+    )
+    comment = models.ForeignKey(
+        Comment, on_delete=models.CASCADE, null=True, blank=True, related_name='reports'
+    )
     reason = models.CharField(max_length=20, choices=REASON_CHOICES)
     description = models.TextField(blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
-    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='reports_reviewed')
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='reports_reviewed'
+    )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     action_taken = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

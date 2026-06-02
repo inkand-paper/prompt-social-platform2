@@ -3042,7 +3042,401 @@ Frontend
 ## Summary — One Paragraph
 
 The backend is structurally complete and correctly wired, with one startup-breaking bug (`Report` import in admin) and one performance bug (N+1 queries on feed). Every feature from the original schema — auth, prompts, ratings, comments, follows, collections, bookmarks, notifications — has a working view and URL. The frontend is fully wired to the real API with correct data flow. The single largest remaining problem is that **100 CSS classes used by every new page are completely absent from `index.css`**, which means the application is logically correct but visually broken on every page beyond the original feed — fix that first, everything else is incremental.
-ENDPLAN
-Output
+
+---
+
+## 14. Live Codebase Audit — June 2025
+
+> **Audited by:** Claude (Anthropic) — full static analysis of every `.py`, `.jsx`, `.js` file in the repo.  
+> **Verdict:** ~60–65% of the way to a production launch. Solid MVP foundation with specific, fixable gaps.
+
+---
+
+### 14.1 Overall Readiness Matrix
+
+| Layer | Status | Summary |
+|---|---|---|
+| Backend architecture | ✅ Solid | Models, views, serializers, URLs all complete and correct |
+| Frontend–API wiring | ✅ Wired | Real API calls throughout — no mock mode active |
+| Security | ⚠️ Partial | Good token hygiene, critical prod hardening missing |
+| Production readiness | ❌ Not ready | Missing rate limiting, async email, WebSockets, deployment config |
+| Enterprise readiness | ❌ Not ready | No SSO, audit logging, admin moderation UI, horizontal scaling config |
+
+---
+
+### 14.2 Backend — What Is Complete
+
+| Feature | File | Notes |
+|---|---|---|
+| Custom User model (UUID PK, email login) | `accounts/models.py` | Correct AbstractBaseUser implementation |
+| JWT auth with token blacklisting | `config/settings.py` | SimpleJWT configured, `token_blacklist` app installed |
+| Full Prompts CRUD + visibility rules | `prompts/views.py` | Owner-scoped queryset on edit/delete, correct |
+| Social graph: Follow, Bookmark, Rating, Comment | `prompts/models.py` | All models present with correct FK relationships |
+| Notifications model (9 event types) | `prompts/models.py` | Complete; mark-read endpoint wired |
+| Report model (6 reason types, status workflow) | `prompts/models.py` | Model complete |
+| Collection + CollectionItem models | `prompts/models.py` | Through-table with sort_order |
+| Trending feed with `trend_score` annotation | `prompts/views.py` | Uses `ExpressionWrapper` — correct Django ORM approach |
+| OpenAI moderation on prompt creation | `prompts/views.py` | Non-blocking (prints error, doesn't block if API is down) |
+| Avatar upload — size limit, type check, Pillow re-encode | `accounts/views.py` | Re-encoding strips EXIF/metadata — good security practice |
+| Password reset — hashed token, 1hr expiry | `accounts/views.py` | `secrets.token_urlsafe` + SHA-256 hash — correct |
+| PostgreSQL configured | `config/settings.py` | With `USE_SQLITE` fallback for local dev |
+| Gunicorn in requirements | `requirements.txt` | Present |
+| Atomic counter increment on copy_count | `prompts/views.py` | Uses `F('copy_count') + 1` — correct, race-safe |
+
+---
+
+### 14.3 Backend — Critical Gaps (must fix before production)
+
+#### 🔴 P0 — Will cause outages or security incidents
+
+**1. No API rate limiting**  
+Zero throttling on any endpoint. The login endpoint (`/auth/login/`), password reset (`/auth/forgot-password/`), and registration (`/auth/register/`) are all wide open to brute-force and credential stuffing attacks.
+
+Fix — add to `config/settings.py`:
+```python
+REST_FRAMEWORK = {
+    ...
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/hour',
+        'user': '1000/hour',
+        'login': '10/hour',
+    }
+}
+```
+And apply `LoginRateThrottle` specifically to `TokenObtainPairView` and `ForgotPasswordView`.
+
+**2. `DEBUG=True` is the default**  
+`settings.py` line: `DEBUG = os.environ.get('DEBUG', 'True') == 'True'`  
+If the `DEBUG` env var is not explicitly set in production, Django will run with full debug mode, exposing complete stack traces, SQL queries, and local variable values to anyone who hits a 500 error.
+
+Fix: change default to `'False'`:
+```python
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+```
+
+**3. `db.sqlite3` committed to the repository**  
+The SQLite database file (440 KB) is tracked in git. It contains seed user data, hashed passwords, and any test content. It must be added to `.gitignore` immediately and the file removed from git history.
+
+```bash
+echo "backend/db.sqlite3" >> .gitignore
+git rm --cached backend/db.sqlite3
+```
+
+**4. No logout endpoint — tokens not server-side blacklisted**  
+`AuthContext.jsx` has the logout API call commented out: `// await api.post('/auth/logout/')`. There is no backend logout view. `rest_framework_simplejwt.token_blacklist` is installed and migrations exist, but it's never used.
+
+Fix — add to `accounts/views.py`:
+```python
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
+
+class LogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request):
+        try:
+            refresh_token = request.data.get("refresh")
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response(status=status.HTTP_205_RESET_CONTENT)
+        except TokenError:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+```
+Add to `accounts/urls.py`: `path('logout/', LogoutView.as_view(), name='auth_logout')`  
+Uncomment the call in `AuthContext.jsx`.
+
+**5. No HTTPS enforcement / HSTS / Secure cookie flags**  
+No `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, or `SECURE_HSTS_SECONDS` in settings. Tokens and cookies will travel over plain HTTP in any non-local deployment without a properly configured reverse proxy enforcing TLS.
+
+Fix — add a production settings block:
+```python
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = 'DENY'
+```
+
+#### 🟡 P1 — Will cause failures under real usage
+
+**6. Email sent synchronously inside request cycle**  
+`ForgotPasswordView` calls `send_mail()` directly. Under any real load this causes request timeouts and blocks the Django worker for the duration of the SMTP round-trip.
+
+Fix: use Celery + Redis for async email:
+```python
+# tasks.py
+from celery import shared_task
+from django.core.mail import send_mail
+
+@shared_task
+def send_password_reset_email(email, reset_url):
+    send_mail(
+        subject='Reset your PromptAtlas password',
+        message=f'Click the link to reset your password: {reset_url}\n\nThis link expires in 1 hour.',
+        from_email='noreply@promptatlas.com',
+        recipient_list=[email],
+    )
+```
+
+**7. Email verification field exists but is never enforced**  
+`User.email_verified` is declared in the model and migration, but no verification email is sent on registration, and no view checks `email_verified` before allowing login or posting. Any email address — including fake or adversarial ones — can be used without verification.
+
+**8. `CollectionItem` add/remove endpoints are missing**  
+`Collection` and `CollectionItem` models are fully defined. `CollectionListCreateView` exists. But there are no endpoints to add a prompt to a collection, remove it, or reorder items. The `CollectionsPage.jsx` page exists on the frontend but has no actionable API calls to back it.
+
+**9. Follow counter update is not atomic**  
+`FollowUserView` does:
+```python
+target_user.follower_count += 1
+request.user.following_count += 1
+target_user.save()
+request.user.save()
+```
+This is a read-modify-write race condition. Under concurrent requests the counter can go out of sync.
+
+Fix:
+```python
+from django.db.models import F
+User.objects.filter(pk=target_user.pk).update(follower_count=F('follower_count') + 1)
+User.objects.filter(pk=request.user.pk).update(following_count=F('following_count') + 1)
+```
+
+**10. No database indexes declared**  
+High-traffic query columns — `Prompt.slug` (already `SlugField unique=True`, indexed), `Prompt.published_at`, `Prompt.author_id`, `Prompt.visibility`, `Prompt.is_removed` — need composite indexes for the feed queries. Without them, `ExploreFeedView` and `TrendingFeedView` will do full table scans at scale.
+
+Add to `Prompt.Meta`:
+```python
+class Meta:
+    indexes = [
+        models.Index(fields=['visibility', 'is_removed', '-published_at']),
+        models.Index(fields=['author', '-published_at']),
+    ]
+```
+
+**11. Report model has no admin view or moderation API**  
+`Report` is defined in `models.py` but not registered in `prompts/admin.py` and there is no moderation API endpoint (list reports, action them, dismiss them). Moderators have no tooling.
+
+**12. No `STATIC_ROOT` / static file serving configuration**  
+`settings.py` has `STATIC_URL = 'static/'` but no `STATIC_ROOT` and no Whitenoise or S3 configuration. `python manage.py collectstatic` has nowhere to write. Gunicorn does not serve static files — this will 404 all static assets in production.
+
+Fix:
+```python
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+And add `whitenoise.middleware.WhiteNoiseMiddleware` to `MIDDLEWARE` after `SecurityMiddleware`.
+
+---
+
+### 14.4 Frontend — Wiring Assessment
+
+#### ✅ Correctly wired
+
+- **`src/lib/api.js`** — Axios instance with in-memory access token storage (not `localStorage`) is the correct security approach. The interceptor correctly queues concurrent 401 retries — a common bug that's handled properly here.
+- **`AuthContext.jsx`** — Connected to real backend (`/auth/me/`, `/auth/login/`, `/auth/register/`). No mock mode.
+- **All feed API calls** — `fetchExploreFeed`, `fetchTrendingFeed`, `fetchTrendingTags`, `fetchTopPrompters`, `fetchCategories` all hit real endpoints.
+- **All user API calls** — Profile, follow/unfollow, bookmarks, notifications, collections — all real.
+- **`SharePromptModal`** — Posts to real `/prompts/create/` endpoint with `react-hook-form` validation.
+- **`ProtectedRoute`** — Correctly redirects unauthenticated users, preserves `location.state.from` for post-login redirect.
+- **`MyPromptsPage`** — Loads and deletes real prompts.
+
+#### ⚠️ Broken or incomplete
+
+**1. `socket.js` connects to Socket.io but the backend is Django WSGI**  
+`src/lib/socket.js` uses `socket.io-client` and connects to `VITE_WS_URL`. The backend is a standard Django WSGI app with no Django Channels, no ASGI configuration, and no Socket.io server. Every `connectSocket()` call on login will fail silently. Real-time notifications do not work.
+
+Fix requires: converting Django to ASGI (`config/asgi.py` already exists), installing `channels` + `channels-redis`, writing a `NotificationConsumer`, and replacing `socket.io-client` with the native WebSocket API or `reconnecting-websocket`.
+
+**2. No `ResetPasswordPage` and no `/reset-password` route**  
+`ForgotPasswordPage.jsx` exists and calls the backend correctly. The backend `ResetPasswordView` exists at `/auth/reset-password/`. But there is no `ResetPasswordPage.jsx` and the route is absent from `main.jsx`. The password reset email sends a link to `/reset-password?token=...` that returns a React 404.
+
+Fix: create `src/pages/ResetPasswordPage.jsx` and add:
+```jsx
+<Route path="reset-password" element={<ResetPasswordPage />} />
+```
+
+**3. Logout does not blacklist the token**  
+`AuthContext.logout()` clears the in-memory access token and calls `disconnectSocket()`, but the `await api.post('/auth/logout/')` call is commented out. The refresh token in the HttpOnly cookie remains valid for 30 days. Anyone with access to the cookie can silently re-authenticate.
+
+**4. Avatar upload does not update `AuthContext` user state**  
+`SettingsPage.jsx` calls `uploadAvatar(file)` successfully, but the `// In production: update user context with new avatar_url` comment is never acted on. The navbar and sidebar continue to show the old avatar until a full page reload.
+
+Fix in `SettingsPage.jsx`:
+```jsx
+const { user, setUser } = useAuth() // expose setUser from AuthContext
+// after upload:
+const result = await uploadAvatar(file)
+setUser(prev => ({ ...prev, avatar_url: result.avatar_url }))
+```
+
+**5. Fork button is UI-only — no API call**  
+`PromptDetailPage.jsx` renders a Fork button that displays the fork count, but clicking it does nothing. The backend has no fork endpoint and `forked_from` FK on `Prompt` is never populated.
+
+**6. `AuthContext` does not expose `setUser`**  
+The `value` object returned by `AuthContext` is `{ user, loading, login, logout, register, refreshToken, isAuthenticated }`. There is no `setUser` or `updateUser` method. Any component that needs to update the user object after a successful patch (settings save, avatar upload) has no way to sync the context without a full `/auth/me/` re-fetch.
+
+Fix — expose an `updateUser` helper:
+```jsx
+const updateUser = useCallback((patch) => setUser(prev => ({ ...prev, ...patch })), [])
+// add to context value
+```
+
+---
+
+### 14.5 Security Posture
+
+#### ✅ Good practices already in place
+
+| Practice | Location | Notes |
+|---|---|---|
+| Access token stored in memory, not `localStorage` | `src/lib/api.js` | Correct — prevents XSS token theft |
+| JWT access token 15-minute lifetime | `config/settings.py` | Short-lived — correct |
+| Refresh token rotation + blacklist on rotation | `config/settings.py` | `ROTATE_REFRESH_TOKENS = True`, `BLACKLIST_AFTER_ROTATION = True` |
+| Password reset token stored as SHA-256 hash | `accounts/views.py` | Raw token sent in email, hash stored in DB — correct |
+| Avatar validated by content-type, size, and re-encoded | `accounts/views.py` | Pillow re-encode strips metadata and prevents polyglot files |
+| Django password validators enabled (all 4) | `config/settings.py` | Length, common, similarity, numeric |
+
+#### 🔴 Critical gaps
+
+| Gap | Risk | Fix |
+|---|---|---|
+| `DEBUG=True` default | Full stack traces exposed in production | Change default to `'False'` |
+| No rate limiting | Brute-force login, password reset enumeration | DRF throttle classes (see §14.3) |
+| CORS hardcoded to localhost | All cross-origin requests blocked in production | Set `CORS_ALLOWED_ORIGINS` from env var |
+| No HTTPS enforcement | Tokens/cookies sent over plain HTTP | `SECURE_SSL_REDIRECT = True` in prod |
+| No logout endpoint | 30-day refresh tokens never invalidated | Add `LogoutView` (see §14.3) |
+| `db.sqlite3` in git | Seed data and hashed passwords in version history | `git rm --cached` + `.gitignore` |
+
+#### 🟡 Notable risks
+
+| Risk | Location | Notes |
+|---|---|---|
+| OAuth tokens stored plaintext | `OAuthProvider.access_token` | Should be encrypted at rest (use `django-encrypted-model-fields`) |
+| No CSP headers | `config/settings.py` | Add via `django-csp` |
+| `ALLOWED_HOSTS` defaults to localhost | `config/settings.py` | Will reject all requests from real domain unless env var is set |
+| `frontend_url` accepted from request body in password reset | `accounts/views.py` | An attacker can supply their own domain as the reset link base — open redirect / phishing vector. Hardcode from env var. |
+
+The `frontend_url` issue in `ForgotPasswordView` deserves a specific fix:
+```python
+# VULNERABLE — current code:
+frontend_url = request.data.get('frontend_url', 'http://localhost:5173')
+
+# SAFE — replace with:
+frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
+```
+
+---
+
+### 14.6 Missing Infrastructure
+
+The repository has no deployment configuration whatsoever. There is no:
+
+- `Dockerfile` or `docker-compose.yml`
+- `.env.example` file documenting required environment variables
+- Nginx configuration
+- CI/CD pipeline (`.github/workflows/`)
+- Health-check endpoint (`/health/` returning `200 OK`)
+- `STATIC_ROOT` / static file serving setup
+- Celery worker configuration
+- Redis configuration
+
+Minimum viable deployment stack for this project:
+
+```
+nginx (TLS termination + static files)
+  └── gunicorn (Django WSGI, 4 workers)
+       └── PostgreSQL 16
+       └── Redis (Celery broker + Django Channels layer when added)
+       └── S3 (media storage — avatars, cover images)
+```
+
+A minimal `docker-compose.yml` should define services: `db` (postgres:16), `redis` (redis:7-alpine), `web` (gunicorn), `worker` (celery), `nginx`.
+
+---
+
+### 14.7 Prioritised Fix List
+
+Work through these in order. Each block is independently deployable.
+
+#### Block A — Security hardening (do before any public exposure)
+1. Change `DEBUG` default to `'False'`
+2. `git rm --cached backend/db.sqlite3` + add to `.gitignore`
+3. Fix `frontend_url` open redirect in `ForgotPasswordView`
+4. Add DRF throttle classes to settings
+5. Add prod security headers (`SECURE_SSL_REDIRECT`, `HSTS`, `SECURE_BROWSER_XSS_FILTER`)
+6. Set `CORS_ALLOWED_ORIGINS` from env var (remove localhost default)
+7. Add `LogoutView` + wire frontend `AuthContext.logout()`
+
+#### Block B — Broken user flows
+1. Create `ResetPasswordPage.jsx` + add route to `main.jsx`
+2. Expose `updateUser` from `AuthContext`; fix avatar upload stale state
+3. Wire `logout()` API call in `AuthContext`
+4. Fix follow counter race condition (use `F()` expressions)
+
+#### Block C — Missing backend features
+1. Email verification on registration (send email, add verification endpoint)
+2. `CollectionItem` add/remove/reorder endpoints
+3. Fork endpoint (`POST /prompts/{id}/fork/`)
+4. Report submit endpoint (`POST /prompts/{id}/report/`)
+5. Admin moderation view for Reports
+
+#### Block D — Performance & scale
+1. Add composite DB indexes to `Prompt` model
+2. Add `STATIC_ROOT` + Whitenoise
+3. Move `send_mail` to Celery task
+4. Add pagination to `CommentListCreateView` and `CollectionListCreateView`
+
+#### Block E — Real-time layer
+1. Convert to ASGI (update `config/asgi.py`)
+2. Install `channels` + `channels-redis`
+3. Write `NotificationConsumer`
+4. Replace `socket.io-client` with native WebSocket in frontend
+
+---
+
+### 14.8 Updated Pre-Launch Checklist
+
+```
+Security
+[ ] DEBUG=False confirmed in production env
+[ ] SECRET_KEY is 50+ random chars from env var
+[ ] ALLOWED_HOSTS includes real production domain
+[ ] CORS_ALLOWED_ORIGINS includes real frontend URL only
+[ ] db.sqlite3 removed from git history
+[ ] frontend_url open redirect fixed in ForgotPasswordView
+[ ] Rate limiting applied to login, register, forgot-password
+[ ] HTTPS enforcement + HSTS headers configured
+[ ] LogoutView exists and frontend calls it
+
+Backend
+[ ] python manage.py check --deploy passes with 0 warnings
+[ ] All migrations applied
+[ ] STATIC_ROOT configured + collectstatic runs
+[ ] Email backend configured (not console backend)
+[ ] Celery worker running and send_mail is async
+[ ] Email verification flow complete
+
+Frontend
+[ ] ResetPasswordPage.jsx created and routed
+[ ] AuthContext exposes updateUser
+[ ] Logout calls backend and blacklists token
+[ ] Avatar upload updates AuthContext state
+[ ] VITE_API_BASE_URL set to production backend URL
+[ ] No hardcoded localhost references
+[ ] npm run build completes with 0 errors
+
+Infrastructure
+[ ] Dockerfile exists and builds successfully
+[ ] docker-compose.yml covers db, redis, web, worker, nginx
+[ ] .env.example documents all required variables
+[ ] Health-check endpoint returns 200
+[ ] PostgreSQL backups configured
+```
 
 exit code 0

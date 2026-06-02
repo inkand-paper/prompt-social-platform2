@@ -1,9 +1,8 @@
 // src/context/AuthContext.jsx
-// Provides user, login(), logout(), refreshToken() to the whole app.
-// Currently uses mock auth — swap the API calls for real ones once Django backend is live.
+// Provides user, login(), logout(), refreshToken(), and updateUser() to the whole app.
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import api, { _setAccessToken, _clearAccessToken } from '../lib/api'
+import api, { _setAccessToken, _setRefreshToken, _getRefreshToken, _clearTokens } from '../lib/api'
 import { connectSocket, disconnectSocket } from '../lib/socket'
 
 const AuthContext = createContext(null)
@@ -12,15 +11,12 @@ export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // ── On mount: check if user has an existing session ──────────
   useEffect(() => {
     async function restoreSession() {
       try {
-        // Try to get current user. Interceptor will handle refresh if access token is missing but cookie exists.
         const { data } = await api.get('/auth/me/')
         setUser(data)
       } catch (err) {
-        // Not logged in or session expired
         setUser(null)
       } finally {
         setLoading(false)
@@ -29,16 +25,17 @@ export function AuthProvider({ children }) {
     restoreSession()
   }, [])
 
-  // ── login(email, password) ───────────────────────────────────
+  const updateUser = useCallback((patch) => {
+    setUser(prev => prev ? { ...prev, ...patch } : null)
+  }, [])
+
   const login = useCallback(async (email, password) => {
     try {
       const { data } = await api.post('/auth/login/', { email, password })
       
-      // DRF SimpleJWT returns { access, refresh }. Refresh is in HttpOnly cookie if configured, 
-      // but here we get it in body too (or we just use access).
       _setAccessToken(data.access)
+      _setRefreshToken(data.refresh) // Store refresh token
       
-      // Fetch full user profile after login
       const userRes = await api.get('/auth/me/')
       setUser(userRes.data)
       
@@ -50,11 +47,10 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  // ── register(username, email, password) ─────────────────────
   const register = useCallback(async (username, email, password) => {
     try {
-      const { data } = await api.post('/auth/register/', { username, email, password })
-      return { success: true, message: 'Account created! You can now log in.' }
+      await api.post('/auth/register/', { username, email, password })
+      return { success: true, message: 'Account created! Please check your email to verify.' }
     } catch (err) {
       const message = err.response?.data?.username?.[0] || 
                       err.response?.data?.email?.[0] || 
@@ -63,25 +59,28 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  // ── logout() ─────────────────────────────────────────────────
   const logout = useCallback(async () => {
     try {
-      // In a real setup, we might want to blacklist the token on backend
-      // await api.post('/auth/logout/')
-    } catch (_) {
-      // ignore
+      const refresh = _getRefreshToken() 
+      if (refresh) {
+        await api.post('/auth/logout/', { refresh })
+      }
+    } catch (err) {
+      console.warn('Backend logout failed', err)
     } finally {
-      _clearAccessToken()
+      _clearTokens()
       disconnectSocket()
       setUser(null)
     }
   }, [])
 
-  // ── refreshToken() ───────────────────────────────────────────
   const refreshToken = useCallback(async () => {
     try {
-      const { data } = await api.post('/auth/refresh/')
+      const refresh = _getRefreshToken()
+      if (!refresh) throw new Error('No refresh token')
+      const { data } = await api.post('/auth/refresh/', { refresh })
       _setAccessToken(data.access)
+      if (data.refresh) _setRefreshToken(data.refresh)
       return data.access
     } catch (_) {
       logout()
@@ -89,7 +88,16 @@ export function AuthProvider({ children }) {
     }
   }, [logout])
 
-  const value = { user, loading, login, logout, register, refreshToken, isAuthenticated: !!user }
+  const value = { 
+    user, 
+    loading, 
+    login, 
+    logout, 
+    register, 
+    refreshToken, 
+    updateUser,
+    isAuthenticated: !!user 
+  }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

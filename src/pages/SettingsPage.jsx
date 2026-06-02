@@ -12,7 +12,7 @@ function getInitials(name = '') {
 const SETTING_TABS = ['Profile', 'Account', 'Notifications']
 
 export default function SettingsPage() {
-  const { user, logout } = useAuth()
+  const { user, updateUser } = useAuth() // Block B #4: use updateUser instead of logout
   const [activeTab, setTab] = useState('Profile')
 
   const [form, setForm] = useState({
@@ -35,9 +35,13 @@ export default function SettingsPage() {
     e.preventDefault()
     setSaving(true)
     try {
-      await updateProfile(form)
+      const result = await updateProfile(form)
+      // Block B #4: Sync local context state
+      updateUser(result)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      console.error('Update failed', err)
     } finally {
       setSaving(false)
     }
@@ -48,8 +52,11 @@ export default function SettingsPage() {
     if (!file) return
     setAvatarUploading(true)
     try {
-      await uploadAvatar(file)
-      // In production: update user context with new avatar_url
+      const result = await uploadAvatar(file)
+      // Block B #4: Sync local context state with new avatar_url
+      updateUser({ avatar_url: result.avatar_url })
+    } catch (err) {
+      console.error('Avatar upload failed', err)
     } finally {
       setAvatarUploading(false)
     }

@@ -48,6 +48,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Auth
     password_reset_token = models.CharField(max_length=64, blank=True, null=True)
     password_reset_expires = models.DateTimeField(null=True, blank=True)
+    email_verification_token = models.CharField(max_length=64, blank=True, null=True)
+    email_verification_sent_at = models.DateTimeField(null=True, blank=True)
     
     # Metadata
     created_at = models.DateTimeField(default=timezone.now)

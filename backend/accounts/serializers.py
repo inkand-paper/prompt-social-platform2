@@ -14,6 +14,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
+    # Block B: display_name is optional on registration form
+    display_name = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = User

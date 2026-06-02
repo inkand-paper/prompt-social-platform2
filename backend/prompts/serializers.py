@@ -2,7 +2,7 @@ from rest_framework import serializers
 from accounts.serializers import UserSerializer
 from .models import (
     Prompt, Category, Tag, Rating, Comment, 
-    Bookmark, Notification, Collection, CollectionItem
+    Bookmark, Notification, Collection, CollectionItem, Report
 )
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -85,3 +85,9 @@ class CollectionItemSerializer(serializers.ModelSerializer):
         model = CollectionItem
         fields = ['id', 'collection', 'prompt', 'added_by', 'note', 'sort_order', 'added_at']
         read_only_fields = ['id', 'added_by', 'added_at']
+
+class ReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Report
+        fields = ['id', 'reporter', 'prompt', 'comment', 'reason', 'description', 'status', 'created_at']
+        read_only_fields = ['id', 'reporter', 'status', 'created_at']

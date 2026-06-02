@@ -9,7 +9,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 const api = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  withCredentials: true, // send HttpOnly refresh-token cookie automatically
+  withCredentials: true, // send HttpOnly refresh-token cookie automatically (if using cookies)
 })
 
 // ── Request interceptor: attach access token ──────────────────
@@ -45,9 +45,17 @@ api.interceptors.response.use(
       _isRefreshing = true
 
       try {
-        const { data } = await axios.post(`${BASE_URL}/auth/refresh/`, {}, { withCredentials: true })
+        const refresh = _getRefreshToken()
+        // If we don't have a refresh token in memory, we can't refresh
+        if (!refresh) throw new Error('No refresh token')
+
+        const { data } = await axios.post(`${BASE_URL}/auth/refresh/`, { refresh }, { withCredentials: true })
         const newToken = data.access
+        const newRefresh = data.refresh // SimpleJWT rotates tokens
+        
         _setAccessToken(newToken)
+        if (newRefresh) _setRefreshToken(newRefresh)
+
         _queue.forEach(({ resolve }) => resolve(newToken))
         _queue = []
         original.headers.Authorization = `Bearer ${newToken}`
@@ -55,9 +63,7 @@ api.interceptors.response.use(
       } catch (refreshError) {
         _queue.forEach(({ reject }) => reject(refreshError))
         _queue = []
-        _clearAccessToken()
-        // DO NOT use window.location.href = '/login' here as it causes infinite reload loops
-        // The AuthContext or specific components will handle redirections based on 401 errors.
+        _clearTokens()
         return Promise.reject(refreshError)
       } finally {
         _isRefreshing = false
@@ -70,9 +76,15 @@ api.interceptors.response.use(
 
 // ── In-memory token storage (NOT localStorage) ────────────────
 let _accessToken = null
+let _refreshToken = null
 
-export function _setAccessToken(token) { _accessToken = token }
-export function _getAccessToken()      { return _accessToken }
-export function _clearAccessToken()    { _accessToken = null }
+export function _setAccessToken(token)  { _accessToken = token }
+export function _getAccessToken()       { return _accessToken }
+export function _setRefreshToken(token) { _refreshToken = token }
+export function _getRefreshToken()      { return _refreshToken }
+export function _clearTokens() {
+  _accessToken = null
+  _refreshToken = null
+}
 
 export default api

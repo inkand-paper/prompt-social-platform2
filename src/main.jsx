@@ -16,6 +16,8 @@ import App from './App'
 import LoginPage          from './pages/LoginPage'
 import RegisterPage       from './pages/RegisterPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage  from './pages/ResetPasswordPage'
+import VerifyEmailPage    from './pages/VerifyEmailPage' // Block C #1
 import ExplorePage        from './pages/ExplorePage'
 import TrendingPage       from './pages/TrendingPage'
 import SearchResultsPage  from './pages/SearchResultsPage'
@@ -51,6 +53,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/login"           element={<LoginPage />} />
               <Route path="/register"        element={<RegisterPage />} />
               <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/reset-password"  element={<ResetPasswordPage />} />
+              <Route path="/verify-email"    element={<VerifyEmailPage />} />
 
               {/* ── Main app shell (Navbar + sidebars) ── */}
               <Route path="/" element={<App />}>
