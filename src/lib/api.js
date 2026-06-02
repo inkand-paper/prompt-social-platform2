@@ -56,7 +56,8 @@ api.interceptors.response.use(
         _queue.forEach(({ reject }) => reject(refreshError))
         _queue = []
         _clearAccessToken()
-        window.location.href = '/login'
+        // DO NOT use window.location.href = '/login' here as it causes infinite reload loops
+        // The AuthContext or specific components will handle redirections based on 401 errors.
         return Promise.reject(refreshError)
       } finally {
         _isRefreshing = false

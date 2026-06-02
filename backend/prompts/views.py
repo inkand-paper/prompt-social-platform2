@@ -170,16 +170,19 @@ class TrendingTagsView(generics.ListAPIView):
     queryset = Tag.objects.all().order_by('-usage_count')[:8]
     serializer_class = TagSerializer
     permission_classes = [permissions.AllowAny]
+    pagination_class = None
 
 class CategoriesView(generics.ListAPIView):
     queryset = Category.objects.all().order_by('sort_order')
     serializer_class = CategorySerializer
     permission_classes = [permissions.AllowAny]
+    pagination_class = None
 
 class TopPromptersView(generics.ListAPIView):
     queryset = User.objects.all().order_by('-reputation_score')[:4]
     serializer_class = UserSerializer
     permission_classes = [permissions.AllowAny]
+    pagination_class = None
 
 class SearchView(generics.ListAPIView):
     serializer_class = PromptSerializer

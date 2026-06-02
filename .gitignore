@@ -26,11 +26,16 @@ dist-ssr
 # Backend
 backend/db.sqlite3
 backend/node_modules/
-backend/*.pyc
-backend/__pycache__/
 backend/.env
 backend/static/
 backend/media/
+
+# Python cache — all levels
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.pyc
 
 # Environment variables
 .env
