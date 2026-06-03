@@ -74,17 +74,23 @@ api.interceptors.response.use(
   }
 )
 
-// ── In-memory token storage (NOT localStorage) ────────────────
+// ── Token storage ─────────────────────────────────────────────
+// Access token: memory only (short-lived, XSS-safe)
+// Refresh token: localStorage (survives page reload, keeps session alive)
+const REFRESH_KEY = 'pa_refresh'
+
 let _accessToken = null
-let _refreshToken = null
 
 export function _setAccessToken(token)  { _accessToken = token }
 export function _getAccessToken()       { return _accessToken }
-export function _setRefreshToken(token) { _refreshToken = token }
-export function _getRefreshToken()      { return _refreshToken }
+export function _setRefreshToken(token) {
+  if (token) localStorage.setItem(REFRESH_KEY, token)
+  else localStorage.removeItem(REFRESH_KEY)
+}
+export function _getRefreshToken()      { return localStorage.getItem(REFRESH_KEY) }
 export function _clearTokens() {
   _accessToken = null
-  _refreshToken = null
+  localStorage.removeItem(REFRESH_KEY)
 }
 
 export default api

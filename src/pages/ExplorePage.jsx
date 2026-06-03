@@ -20,7 +20,7 @@ export default function ExplorePage() {
         {QUICK_CATS.map((cat) => (
           <button
             key={cat.value}
-            className={`cat-pill ${selectedCat === cat.value ? 'active' : ''}`}
+            className={`cat-filter-btn ${selectedCat === cat.value ? 'active' : ''}`}
             onClick={() => setSelectedCat(cat.value)}
           >
             {cat.label}

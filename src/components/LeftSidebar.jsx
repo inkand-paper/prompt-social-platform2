@@ -3,6 +3,7 @@
 // "Share a Prompt" button triggers the SharePromptModal.
 
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import Avatar from './Avatar'
@@ -51,6 +52,7 @@ const MENU = [
 
 export default function LeftSidebar() {
   const { user, isAuthenticated } = useAuth()
+  const queryClient = useQueryClient()
   const location = useLocation()
   const [showModal, setShowModal] = useState(false)
 
@@ -136,8 +138,7 @@ export default function LeftSidebar() {
           onClose={() => setShowModal(false)}
           onSuccess={() => {
             setShowModal(false)
-            // TODO: invalidate feed query when backend is live
-            // queryClient.invalidateQueries(['feed'])
+            queryClient.invalidateQueries({ queryKey: ['feed'] })
           }}
         />
       )}

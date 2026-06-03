@@ -13,10 +13,27 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     async function restoreSession() {
+      // If there's a stored refresh token, use it to get a new access token first
+      const storedRefresh = _getRefreshToken()
+      if (storedRefresh) {
+        try {
+          const { data: tokenData } = await api.post('/auth/refresh/', { refresh: storedRefresh })
+          _setAccessToken(tokenData.access)
+          if (tokenData.refresh) _setRefreshToken(tokenData.refresh)
+        } catch (_) {
+          // Refresh token expired — clear and fall through to logged-out state
+          _clearTokens()
+          setUser(null)
+          setLoading(false)
+          return
+        }
+      }
+      // Now try to load the user profile
       try {
         const { data } = await api.get('/auth/me/')
         setUser(data)
       } catch (err) {
+        _clearTokens()
         setUser(null)
       } finally {
         setLoading(false)

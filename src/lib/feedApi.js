@@ -26,7 +26,7 @@ export function normalizePrompt(raw) {
     ratingCount: raw.rating_count || 0,
     copyCount:   raw.copy_count || 0,
     viewCount:   raw.view_count || 0,
-    img:         raw.cover_image_url || null,
+    img:         raw.cover_image_url || (raw.prompt_type === 'image' ? '__image_type__' : null),
     ar:          raw.aspect_ratio || 'ar-4-3',
     isFeatured:  raw.is_featured || false,
     createdAt:   raw.created_at,
