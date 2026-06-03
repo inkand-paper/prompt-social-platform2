@@ -37,8 +37,7 @@ class CreatePromptSerializer(serializers.ModelSerializer):
         fields = ['title', 'body', 'description', 'prompt_type', 'visibility', 'target_model', 'variables']
 
     def create(self, validated_data):
-        user = self.context['request'].user
-        prompt = Prompt.objects.create(author=user, **validated_data)
+        prompt = Prompt.objects.create(**validated_data)
         return prompt
 
 class RatingSerializer(serializers.ModelSerializer):
