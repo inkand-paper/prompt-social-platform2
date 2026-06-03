@@ -1349,3 +1349,203 @@ body {
 .profile-stat-label { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .profile-stat-rep { display: flex; align-items: center; gap: 4px; color: #f59e0b; }
 .profile-hero-skeleton { display: flex; gap: 20px; align-items: flex-start; padding: 28px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MISSING UTILITY CLASSES — added to fix broken UI
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Generic Buttons (btn, btn-primary, btn-secondary) ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-2);
+  padding: 9px 20px;
+  border-radius: var(--btn-radius);
+  font-size: var(--fs-sm); font-weight: 600;
+  cursor: pointer; border: none;
+  transition: opacity 0.15s, transform 0.15s, background 0.15s;
+  white-space: nowrap; text-decoration: none;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+.btn-secondary {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-hi);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+
+/* ── Alert / Error banner ── */
+.alert {
+  padding: 10px 14px;
+  border-radius: var(--btn-radius);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.alert-error {
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.35);
+  color: #fca5a5;
+}
+.alert-success {
+  background: rgba(52,211,153,0.1);
+  border: 1px solid rgba(52,211,153,0.3);
+  color: #6ee7b7;
+}
+
+/* ── Auth pages: container & small helpers ── */
+.auth-container {
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--sp-6);
+  background: var(--bg);
+}
+.auth-error {
+  padding: 9px 13px;
+  border-radius: var(--btn-radius);
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: #fca5a5;
+  font-size: var(--fs-sm);
+  margin-bottom: var(--sp-3);
+}
+.auth-footer {
+  text-align: center;
+  margin-top: var(--sp-5);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.auth-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.auth-link:hover { text-decoration: underline; }
+
+/* ── Skeleton loading animation ── */
+@keyframes sk-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.sk-fade {
+  animation: sk-shimmer 1.4s ease infinite;
+}
+.sk-block {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.09) 50%,
+    rgba(255,255,255,0.04) 75%
+  );
+  background-size: 800px 100%;
+  animation: sk-shimmer 1.4s ease infinite;
+  border-radius: 6px;
+}
+
+/* ── Category filter bar (ExplorePage) ── */
+.cat-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-3) 0;
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.cat-filter-btn {
+  padding: 5px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-body);
+  font-size: var(--fs-sm); font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.cat-filter-btn:hover { border-color: var(--accent); color: var(--text-hi); }
+.cat-filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── Modal footer (SharePromptModal) ── */
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-3);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  margin-top: var(--sp-4);
+}
+
+/* ── Radio group (SharePromptModal visibility selector) ── */
+.radio-group {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.radio-group label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-body);
+  cursor: pointer;
+}
+.radio-group input[type="radio"] {
+  accent-color: var(--accent);
+  width: 15px; height: 15px;
+  cursor: pointer;
+}
+
+/* ── Notification preferences (SettingsPage) ── */
+.notif-prefs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.notif-pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--btn-radius);
+  background: rgba(255,255,255,0.025);
+  border: 1px solid var(--border);
+}
+.notif-pref-label {
+  font-size: var(--fs-sm);
+  color: var(--text-body);
+}
+
+/* ── Toggle switch (used in notif-prefs) ── */
+.toggle-switch {
+  position: relative;
+  width: 40px; height: 22px;
+  flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0;
+  border-radius: 11px;
+  background: rgba(255,255,255,0.12);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+.toggle-track::before {
+  content: '';
+  position: absolute;
+  left: 3px; top: 3px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-track::before { transform: translateX(18px); }
